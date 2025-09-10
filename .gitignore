@@ -1,0 +1,25 @@
+# Node
+node_modules/
+**/node_modules/
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Env files
+.env
+**/.env
+.env.local
+.env.*.local
+
+# Build outputs
+dist/
+build/
+.vite/
+backend/uploads/
+
+# Editor
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json

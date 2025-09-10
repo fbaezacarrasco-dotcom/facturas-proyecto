@@ -1,0 +1,243 @@
+/* Root container takes full viewport without center constraints */
+#root {
+  margin: 0;
+  padding: 0;
+  max-width: none;
+}
+
+/* Layout: sidebar left, content right */
+.app-layout {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  min-height: 100vh;
+}
+
+.sidebar {
+  box-sizing: border-box;
+  padding: 24px;
+  border-right: 1px solid rgba(128, 128, 128, 0.25);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sidebar h1 {
+  margin: 0 0 12px 0;
+  font-size: 20px;
+}
+
+.menu-button {
+  width: 100%;
+  padding: 12px 16px;
+  border-radius: 8px;
+  border: 1px solid rgba(128, 128, 128, 0.25);
+  background: #f5f5f5;
+  color: #222;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+.menu-button:hover {
+  background: #eaeaea;
+  border-color: rgba(128, 128, 128, 0.5);
+}
+.menu-button:active {
+  background: #e2e2e2;
+}
+
+.content {
+  box-sizing: border-box;
+  padding: 24px;
+}
+
+.content-placeholder {
+  height: 100%;
+  min-height: calc(100vh - 48px);
+  border: 2px dashed rgba(128, 128, 128, 0.35);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #666;
+  font-size: 14px;
+}
+
+/* Login page styles */
+.login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    linear-gradient(rgba(0,0,0,0.35), rgba(0,0,0,0.35)),
+    url('/bg-login.jpg') center / cover no-repeat fixed;
+}
+
+/* Factura form styles */
+.factura-form {
+  margin-top: 8px;
+}
+
+.factura-form .grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.factura-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+}
+
+.factura-form label.full {
+  grid-column: 1 / -1;
+}
+
+.factura-form input,
+.factura-form select,
+.factura-form textarea {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #d0d0d0;
+  background: #fff;
+  color: #111;
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.filters input,
+.filters select {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #d0d0d0;
+  background: #fff;
+}
+
+.table-wrapper {
+  margin-top: 12px;
+  overflow: auto;
+}
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.table th,
+.table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #e6e6e6;
+  text-align: left;
+  font-size: 14px;
+}
+.table thead th {
+  background: #f5f5f5;
+}
+
+.badge {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1;
+  border: 1px solid transparent;
+}
+.badge-green { background: #e8f7ec; color: #166534; border-color: #bbdec5; }
+.badge-red { background: #fdeaea; color: #991b1b; border-color: #f4c7c7; }
+.badge-yellow { background: #fef7e7; color: #92400e; border-color: #f5e1b8; }
+.badge-gray { background: #f3f4f6; color: #374151; border-color: #e5e7eb; }
+
+/* Modal */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+.modal-card {
+  width: min(900px, 92vw);
+  max-height: 90vh;
+  background: #fff;
+  color: #111;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid #e5e7eb;
+}
+.modal-header h3 { margin: 0; font-size: 16px; }
+.modal-body { padding: 16px; overflow: auto; }
+
+.thumb {
+  width: 60px;
+  height: 60px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid #e5e7eb;
+  cursor: pointer;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 420px;
+  background: #fff;
+  color: #111;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+  padding: 28px;
+  box-sizing: border-box;
+}
+
+.login-card h1 {
+  margin: 0 0 16px 0;
+  font-size: 22px;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.login-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+}
+
+.login-form input {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #d0d0d0;
+  background: #fff;
+  color: #111;
+}
+
+.login-button {
+  margin-top: 6px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: #111827;
+  color: #fff;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+.login-button:hover {
+  background: #0b1220;
+}
