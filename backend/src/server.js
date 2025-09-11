@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import multer from "multer";
 import path from "path";
+import { fileURLToPath } from "url";
 import fs from "fs";
 import { initDb, query } from "./db.js";
 const SKIP_DB = String(process.env.SKIP_DB_INIT || "0").toLowerCase() === "1" || String(process.env.SKIP_DB_INIT || "").toLowerCase() === "true";
@@ -26,7 +27,8 @@ app.get("/api/health", (req, res) => {
 });
 
 // Configuración de subida de archivos para facturas
-const uploadsDir = path.join(process.cwd(), "backend", "uploads");
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const uploadsDir = path.join(__dirname, "..", "uploads");
 fs.mkdirSync(uploadsDir, { recursive: true });
 
 const storage = multer.diskStorage({
@@ -350,6 +352,28 @@ app.get('/api/facturas/:id/historial', async (req, res) => {
   } catch (err) {
     console.error('GET /api/facturas/:id/historial error:', err)
     res.status(400).json({ ok: false, message: 'Error al obtener historial' })
+  }
+})
+
+// Solo en modo sin DB: reset de datos y limpieza de archivos subidos (para desarrollo)
+app.delete('/api/__dev/reset', async (req, res) => {
+  if (!SKIP_DB) return res.status(400).json({ ok: false, message: 'Disponible solo en modo sin DB (SKIP_DB_INIT=1)' })
+  try {
+    // Vaciar memoria
+    memFacturas.length = 0
+    memHistorial.length = 0
+    // Borrar archivos en uploads
+    try {
+      const files = fs.readdirSync(uploadsDir)
+      for (const f of files) {
+        const p = path.join(uploadsDir, f)
+        try { fs.unlinkSync(p) } catch {}
+      }
+    } catch {}
+    res.json({ ok: true, message: 'Datos de memoria y archivos limpiados' })
+  } catch (err) {
+    console.error('DELETE /api/__dev/reset error:', err)
+    res.status(500).json({ ok: false, message: 'Error al limpiar' })
   }
 })
 

@@ -17,6 +17,7 @@ dist/
 build/
 .vite/
 backend/uploads/
+**/uploads/
 
 # Editor
 .DS_Store
