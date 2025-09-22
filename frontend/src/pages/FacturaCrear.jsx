@@ -1,16 +1,38 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+// # Formulario de creación de factura
+// # Envía datos + archivos (hasta 5) mediante FormData a POST /api/facturas
 
-const clientes = [
-  { value: '1', label: 'Brival' },
-  { value: '2', label: 'Nutrisco' },
-  { value: '3', label: 'Carnicero' },
-  { value: '4', label: 'Gourmet' },
-]
+// Clientes dinámicos desde backend
+const useClientes = (getAuthHeaders) => {
+  const [list, setList] = useState([])
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const res = await fetch('/api/clients', { headers: { ...(getAuthHeaders?.() || {}) } })
+        const json = await res.json()
+        if (res.ok && json?.ok) setList((json.data || []).map(c => ({ value: String(c.id), label: c.name })))
+      } catch {}
+    }
+    load()
+  }, [])
+  return list
+}
 
-function FacturaCrear({ onClose }) {
+function FacturaCrear({ onClose, getAuthHeaders }) {
+  const clientes = useClientes(getAuthHeaders)
+  // Fecha y día por defecto (según PC)
+  const now = new Date()
+  const yyyy = now.getFullYear()
+  const mm = String(now.getMonth() + 1).padStart(2, '0')
+  const dd = String(now.getDate()).padStart(2, '0')
+  const fechaHoy = `${yyyy}-${mm}-${dd}`
+  const dias = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado']
+  const diaNombre = dias[now.getDay()]
+  const diaPorDefecto = diaNombre
+
   const [form, setForm] = useState({
-    dia: '',
-    fecha: '',
+    dia: diaPorDefecto,
+    fecha: fechaHoy,
     conductorXp: '',
     camion: '',
     vueltas: '',
@@ -19,7 +41,7 @@ function FacturaCrear({ onClose }) {
     kg: '',
     carga: '',
     observaciones: '',
-    cliente: clientes[0].value,
+    cliente: clientes[0]?.value || '1',
     estado: 'entregado sin novedad',
   })
   const [archivos, setArchivos] = useState([])
@@ -27,11 +49,13 @@ function FacturaCrear({ onClose }) {
   const [result, setResult] = useState(null)
 
   const onChange = (e) => {
+    // # Actualiza el estado de un campo del formulario
     const { name, value } = e.target
     setForm((f) => ({ ...f, [name]: value }))
   }
 
   const onFilesChange = (e) => {
+    // # Controla selección de archivos (máx. 5)
     const files = Array.from(e.target.files || [])
     if (files.length > 5) {
       alert('Máximo 5 archivos por factura')
@@ -41,6 +65,7 @@ function FacturaCrear({ onClose }) {
   }
 
   const onSubmit = async (e) => {
+    // # Construye FormData con campos + archivos y envía al backend
     e.preventDefault()
     if (archivos.length > 5) {
       alert('Máximo 5 archivos por factura')
@@ -53,7 +78,7 @@ function FacturaCrear({ onClose }) {
       Object.entries(form).forEach(([k, v]) => fd.append(k, v))
       archivos.forEach((file) => fd.append('archivos', file))
 
-      const res = await fetch('/api/facturas', { method: 'POST', body: fd })
+      const res = await fetch('/api/facturas', { method: 'POST', headers: { ...getAuthHeaders?.() }, body: fd })
       const data = await res.json()
       if (!res.ok) throw new Error(data?.message || 'Error')
       setResult({ ok: true, message: 'Factura enviada correctamente' })
@@ -93,6 +118,7 @@ function FacturaCrear({ onClose }) {
             <span>Día</span>
             <select name="dia" value={form.dia} onChange={onChange} required>
               <option value="">Seleccionar</option>
+              <option value="Domingo">Domingo</option>
               <option value="Lunes">Lunes</option>
               <option value="Martes">Martes</option>
               <option value="Miércoles">Miércoles</option>

@@ -1,32 +1,295 @@
 import "dotenv/config";
+// # Servidor HTTP de la API: Express + CORS + Multer
+// # Contiene rutas para crear/listar/editar facturas y servir archivos.
 import express from "express";
 import cors from "cors";
 import multer from "multer";
 import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
-import { initDb, query } from "./db.js";
+import { initDb, ensureSeed, query } from "./db.js";
+import bcrypt from 'bcrypt'
+import jwt from 'jsonwebtoken'
+import xlsx from 'xlsx'
+// # Modo demo sin DB: si SKIP_DB_INIT=1, no se conecta a Postgres y usa memoria
 const SKIP_DB = String(process.env.SKIP_DB_INIT || "0").toLowerCase() === "1" || String(process.env.SKIP_DB_INIT || "").toLowerCase() === "true";
 
 const app = express();
 
-// Middlewares básicos
+// # Middlewares básicos: CORS y parsers de JSON/urlencoded
 const corsOrigin = process.env.CORS_ORIGIN || "http://localhost:5173";
 app.use(cors({ origin: corsOrigin, credentials: true }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Ruta de prueba
+// ===== CAPTCHA verify helper (Turnstile por defecto) =====
+const CAPTCHA_ENABLED = String(process.env.CAPTCHA_ENABLED || '0').toLowerCase() === '1' || String(process.env.CAPTCHA_ENABLED || '').toLowerCase() === 'true'
+const CAPTCHA_PROVIDER = (process.env.CAPTCHA_PROVIDER || 'turnstile').toLowerCase()
+const CAPTCHA_SECRET = process.env.CAPTCHA_SECRET || ''
+const CAPTCHA_SIMPLE_TTL = process.env.CAPTCHA_SIMPLE_TTL || '120s'
+const CAPTCHA_SIMPLE_SECRET = process.env.CAPTCHA_SIMPLE_SECRET || JWT_SECRET
+
+async function verifyCaptcha(token, remoteip, answer) {
+  try {
+    if (!CAPTCHA_ENABLED) return true
+    if (!token) return false
+    if (CAPTCHA_PROVIDER === 'turnstile') {
+      const form = new URLSearchParams()
+      form.set('secret', CAPTCHA_SECRET)
+      form.set('response', token)
+      if (remoteip) form.set('remoteip', remoteip)
+      const r = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', { method: 'POST', body: form })
+      const j = await r.json().catch(() => ({}))
+      return !!j.success
+    }
+    if (CAPTCHA_PROVIDER === 'recaptcha') {
+      const form = new URLSearchParams()
+      form.set('secret', CAPTCHA_SECRET)
+      form.set('response', token)
+      if (remoteip) form.set('remoteip', remoteip)
+      const r = await fetch('https://www.google.com/recaptcha/api/siteverify', { method: 'POST', body: form })
+      const j = await r.json().catch(() => ({}))
+      return !!j.success
+    }
+    if (CAPTCHA_PROVIDER === 'simple') {
+      try {
+        const payload = jwt.verify(token, CAPTCHA_SIMPLE_SECRET)
+        const a = Number(payload.a), b = Number(payload.b)
+        const expected = a + b
+        return Number(answer) === expected
+      } catch {
+        return false
+      }
+    }
+    // Otros proveedores podrían añadirse aquí
+    return false
+  } catch {
+    return false
+  }
+}
+
+// # Ruta de prueba rápida
 app.get("/", (req, res) => {
   res.send("🚀 Servidor funcionando!");
 });
 
-// Healthcheck para frontend y monitoreo
+// # Healthcheck para frontend y monitoreo
 app.get("/api/health", (req, res) => {
   res.json({ ok: true, message: "API OK", timestamp: new Date().toISOString() });
 });
 
-// Configuración de subida de archivos para facturas
+// # GET /api/health/db — prueba de conectividad a la base de datos
+app.get("/api/health/db", async (req, res) => {
+  if (SKIP_DB) {
+    return res.status(200).json({ ok: false, message: "SKIP_DB_INIT=1 (modo sin DB)" });
+  }
+  try {
+    const { rows } = await query("SELECT 1 AS ok");
+    return res.json({ ok: true, result: rows[0] });
+  } catch (err) {
+    return res.status(500).json({ ok: false, message: "DB error", error: err.message });
+  }
+});
+
+// # Auth helpers y middleware
+const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_change_me'
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '8h' // configurable vía .env
+
+function signToken(user) {
+  // Firma JWT con expiración configurable (por defecto 8h)
+  return jwt.sign({ sub: user.id, role: user.role, email: user.email }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN })
+}
+
+function authMiddleware(req, _res, next) {
+  const h = req.headers['authorization'] || ''
+  const m = h.match(/^Bearer\s+(.+)$/i)
+  if (m) {
+    try { req.user = jwt.verify(m[1], JWT_SECRET) } catch { req.user = null }
+  }
+  next()
+}
+
+function requireAuth(req, res, next) {
+  if (!req.user) return res.status(401).json({ ok: false, message: 'Auth requerida' })
+  next()
+}
+
+function requireRole(role) {
+  return (req, res, next) => {
+    if (!req.user) return res.status(401).json({ ok: false, message: 'Auth requerida' })
+    if (req.user.role !== role) return res.status(403).json({ ok: false, message: 'Permisos insuficientes' })
+    next()
+  }
+}
+
+// Acepta cualquiera de los roles especificados
+function requireRoles(roles) {
+  return (req, res, next) => {
+    if (!req.user) return res.status(401).json({ ok: false, message: 'Auth requerida' })
+    if (!roles.includes(req.user.role)) return res.status(403).json({ ok: false, message: 'Permisos insuficientes' })
+    next()
+  }
+}
+
+app.use(authMiddleware)
+
+// Listado de clientes activos para selects en el frontend
+app.get('/api/clients', requireAuth, async (_req, res) => {
+  try {
+    if (SKIP_DB) {
+      // En modo memoria devolvemos el seed por defecto
+      return res.json({ ok: true, data: [
+        { id: 1, name: 'Brival', active: true },
+        { id: 2, name: 'Nutrisco', active: true },
+        { id: 3, name: 'Carnicero', active: true },
+        { id: 4, name: 'Gourmet', active: true },
+      ] })
+    }
+    const { rows } = await query('SELECT id, name, active FROM clients WHERE active = true ORDER BY name ASC', [])
+    res.json({ ok: true, data: rows })
+  } catch (e) {
+    res.status(500).json({ ok: false, message: 'Error al listar clientes' })
+  }
+})
+
+// # POST /auth/login — autenticar usuario y emitir JWT
+app.post('/auth/login', async (req, res) => {
+  try {
+    const { email, password, captchaToken, captchaAnswer } = req.body || {}
+    if (!email || !password) return res.status(400).json({ ok: false, message: 'email y password requeridos' })
+    // Verificación CAPTCHA (si está habilitado)
+    const okCaptcha = await verifyCaptcha(captchaToken, req.ip, captchaAnswer)
+    if (!okCaptcha) return res.status(400).json({ ok: false, message: 'CAPTCHA inválido' })
+    if (SKIP_DB) return res.status(400).json({ ok: false, message: 'Auth no disponible en modo sin DB' })
+    const { rows } = await query('SELECT id, email, password_hash, role, active FROM users WHERE email=$1', [email])
+    if (!rows.length || rows[0].active === false) return res.status(401).json({ ok: false, message: 'Credenciales inválidas' })
+    const u = rows[0]
+    const ok = await bcrypt.compare(password, u.password_hash)
+    if (!ok) return res.status(401).json({ ok: false, message: 'Credenciales inválidas' })
+    const token = signToken({ id: u.id, role: u.role, email: u.email })
+    res.json({ ok: true, token, user: { id: u.id, email: u.email, role: u.role } })
+  } catch (err) {
+    console.error('POST /auth/login error:', err)
+    res.status(400).json({ ok: false, message: 'Error en login' })
+  }
+})
+
+// Generar desafío CAPTCHA simple (suma) — solo si provider simple está activo
+app.get('/auth/captcha', async (_req, res) => {
+  if (!CAPTCHA_ENABLED || CAPTCHA_PROVIDER !== 'simple') return res.json({ ok: false, message: 'CAPTCHA simple no activo' })
+  const a = 1 + Math.floor(Math.random() * 9)
+  const b = 1 + Math.floor(Math.random() * 9)
+  const token = jwt.sign({ a, b }, CAPTCHA_SIMPLE_SECRET, { expiresIn: CAPTCHA_SIMPLE_TTL })
+  res.json({ ok: true, question: `${a} + ${b} = ?`, token, ttl: CAPTCHA_SIMPLE_TTL })
+})
+
+// ===== Admin endpoints: Users =====
+app.get('/admin/users', requireRole('admin'), async (req, res) => {
+  try {
+    if (SKIP_DB) return res.json({ ok: true, data: [] })
+    const { rows } = await query('SELECT id, email, role, active, created_at FROM users ORDER BY created_at DESC', [])
+    res.json({ ok: true, data: rows })
+  } catch (err) {
+    console.error('GET /admin/users error:', err)
+    res.status(500).json({ ok: false, message: 'Error al listar usuarios' })
+  }
+})
+
+app.post('/admin/users', requireRole('admin'), async (req, res) => {
+  try {
+    if (SKIP_DB) return res.status(400).json({ ok: false, message: 'No disponible en modo sin DB' })
+    const { email, password, role = 'viewer', active = true } = req.body || {}
+    if (!email || !password || !['admin','viewer','editor'].includes(role)) {
+      return res.status(400).json({ ok: false, message: 'email, password y role válidos son requeridos' })
+    }
+    const hash = await bcrypt.hash(password, 10)
+    const { rows } = await query('INSERT INTO users (email, password_hash, role, active) VALUES ($1,$2,$3,$4) RETURNING id, email, role, active, created_at', [email, hash, role, active])
+    res.status(201).json({ ok: true, data: rows[0] })
+  } catch (err) {
+    console.error('POST /admin/users error:', err)
+    res.status(400).json({ ok: false, message: err.message || 'Error al crear usuario' })
+  }
+})
+
+app.patch('/admin/users/:id', requireRole('admin'), async (req, res) => {
+  try {
+    if (SKIP_DB) return res.status(400).json({ ok: false, message: 'No disponible en modo sin DB' })
+    const id = Number(req.params.id)
+    const { role, active } = req.body || {}
+    const fields = []
+    const values = []
+    if (role) { if (!['admin','viewer','editor'].includes(role)) return res.status(400).json({ ok: false, message: 'role inválido' }); values.push(role); fields.push(`role = $${values.length}`) }
+    if (typeof active === 'boolean') { values.push(active); fields.push(`active = $${values.length}`) }
+    if (!fields.length) return res.status(400).json({ ok: false, message: 'Nada que actualizar' })
+    values.push(id)
+    const { rows } = await query(`UPDATE users SET ${fields.join(', ')} WHERE id=$${values.length} RETURNING id, email, role, active, created_at`, values)
+    res.json({ ok: true, data: rows[0] })
+  } catch (err) {
+    console.error('PATCH /admin/users/:id error:', err)
+    res.status(400).json({ ok: false, message: 'Error al actualizar usuario' })
+  }
+})
+
+app.patch('/admin/users/:id/password', requireRole('admin'), async (req, res) => {
+  try {
+    if (SKIP_DB) return res.status(400).json({ ok: false, message: 'No disponible en modo sin DB' })
+    const id = Number(req.params.id)
+    const { password } = req.body || {}
+    if (!password) return res.status(400).json({ ok: false, message: 'password requerido' })
+    const hash = await bcrypt.hash(password, 10)
+    await query('UPDATE users SET password_hash=$1 WHERE id=$2', [hash, id])
+    res.json({ ok: true })
+  } catch (err) {
+    console.error('PATCH /admin/users/:id/password error:', err)
+    res.status(400).json({ ok: false, message: 'Error al cambiar contraseña' })
+  }
+})
+
+// ===== Admin endpoints: Clients =====
+app.get('/admin/clients', requireRole('admin'), async (_req, res) => {
+  try {
+    if (SKIP_DB) return res.json({ ok: true, data: [] })
+    const { rows } = await query('SELECT id, name, active, created_at FROM clients ORDER BY name ASC', [])
+    res.json({ ok: true, data: rows })
+  } catch (err) {
+    console.error('GET /admin/clients error:', err)
+    res.status(500).json({ ok: false, message: 'Error al listar clientes' })
+  }
+})
+
+app.post('/admin/clients', requireRole('admin'), async (req, res) => {
+  try {
+    if (SKIP_DB) return res.status(400).json({ ok: false, message: 'No disponible en modo sin DB' })
+    const { name } = req.body || {}
+    if (!name) return res.status(400).json({ ok: false, message: 'name requerido' })
+    const { rows } = await query('INSERT INTO clients (name) VALUES ($1) ON CONFLICT (name) DO NOTHING RETURNING id, name, active, created_at', [name])
+    res.status(201).json({ ok: true, data: rows[0] || null })
+  } catch (err) {
+    console.error('POST /admin/clients error:', err)
+    res.status(400).json({ ok: false, message: 'Error al crear cliente' })
+  }
+})
+
+app.patch('/admin/clients/:id', requireRole('admin'), async (req, res) => {
+  try {
+    if (SKIP_DB) return res.status(400).json({ ok: false, message: 'No disponible en modo sin DB' })
+    const id = Number(req.params.id)
+    const { name, active } = req.body || {}
+    const fields = []
+    const values = []
+    if (name) { values.push(name); fields.push(`name = $${values.length}`) }
+    if (typeof active === 'boolean') { values.push(active); fields.push(`active = $${values.length}`) }
+    if (!fields.length) return res.status(400).json({ ok: false, message: 'Nada que actualizar' })
+    values.push(id)
+    const { rows } = await query(`UPDATE clients SET ${fields.join(', ')} WHERE id=$${values.length} RETURNING id, name, active, created_at`, values)
+    res.json({ ok: true, data: rows[0] })
+  } catch (err) {
+    console.error('PATCH /admin/clients/:id error:', err)
+    res.status(400).json({ ok: false, message: 'Error al actualizar cliente' })
+  }
+})
+
+// # Configuración de subida de archivos para facturas (backend/uploads)
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadsDir = path.join(__dirname, "..", "uploads");
 fs.mkdirSync(uploadsDir, { recursive: true });
@@ -56,13 +319,27 @@ const upload = multer({
   },
 });
 
-// Almacenamiento en memoria si SKIP_DB está activo
+// Multer para Excel/CSV (planificación)
+const uploadExcel = multer({
+  storage,
+  limits: { files: 1, fileSize: 20 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase()
+    const ok = ['.xlsx', '.xls', '.csv'].includes(ext)
+    cb(ok ? null : new Error('Archivo no soportado (solo .xlsx/.xls/.csv)'), ok)
+  }
+})
+
+// # Almacenamiento en memoria si SKIP_DB está activo (se pierde al reiniciar)
 const memFacturas = [];
 const memHistorial = [];
 let memId = 1;
+const memResguardos = [];
+const memRendiciones = [];
+const memRutaStatus = [];
 
-// Endpoint para crear factura (DB o memoria)
-app.post("/api/facturas", upload.array("archivos", 5), async (req, res) => {
+// # POST /api/facturas — Crear factura (DB o memoria)
+app.post("/api/facturas", requireRoles(['admin','editor']), upload.array("archivos", 5), async (req, res) => {
   try {
     const b = req.body || {}
     const cliente = Number(b.cliente)
@@ -135,8 +412,833 @@ app.post("/api/facturas", upload.array("archivos", 5), async (req, res) => {
   }
 })
 
-// Listado de facturas con filtros básicos
-app.get("/api/facturas", async (req, res) => {
+// # POST /api/resguardos — crear registro de resguardo (máx 3 imágenes)
+app.post("/api/resguardos", requireRoles(['admin','editor']), upload.array("imagenes", 3), async (req, res) => {
+  try {
+    const b = req.body || {}
+    const cantidad = b.cantidad ? Number(b.cantidad) : null
+    const tipo = b.tipo || null
+    const cliente = b.cliente ? Number(b.cliente) : null
+    const fechaIngreso = b.fecha_ingreso
+    if (!cantidad || !tipo || !cliente || !fechaIngreso) {
+      return res.status(400).json({ ok: false, message: "cantidad, tipo, cliente y fecha_ingreso son obligatorios" })
+    }
+    const files = req.files || []
+
+    if (SKIP_DB) {
+      const id = memId++
+      memResguardos.unshift({
+        id,
+        cantidad,
+        tipo,
+        nombre: b.nombre || null,
+        guia: b.guia || null,
+        cliente,
+        fecha_ingreso: fechaIngreso,
+        fecha_salida: b.fecha_salida || null,
+        archivos: files.map((f) => ({ filename: f.filename, mimetype: f.mimetype, size: f.size })),
+        created_at: new Date().toISOString(),
+      })
+      return res.status(201).json({ ok: true, id })
+    }
+
+    const sql = `
+      INSERT INTO resguardos (cantidad, tipo, nombre, guia, cliente, fecha_ingreso, fecha_salida)
+      VALUES ($1,$2,$3,$4,$5,$6,$7)
+      RETURNING id
+    `
+    const { rows } = await query(sql, [
+      cantidad,
+      tipo,
+      b.nombre || null,
+      b.guia || null,
+      cliente,
+      fechaIngreso,
+      b.fecha_salida || null,
+    ])
+    const id = rows[0].id
+    if (files.length) {
+      const ins = `INSERT INTO resguardo_archivos (resguardo_id, filename, mimetype, size) VALUES ($1,$2,$3,$4)`
+      for (const f of files) {
+        await query(ins, [id, f.filename, f.mimetype, f.size])
+      }
+    }
+    res.status(201).json({ ok: true, id })
+  } catch (err) {
+    console.error('POST /api/resguardos error:', err)
+    res.status(400).json({ ok: false, message: err.message || 'Error al crear resguardo' })
+  }
+})
+
+// ===== Rendiciones =====
+// POST /api/rendiciones — crear rendición
+app.post('/api/rendiciones', requireRoles(['admin','editor']), async (req, res) => {
+  try {
+    const b = req.body || {}
+    const fecha = b.fecha
+    if (!fecha) return res.status(400).json({ ok: false, message: 'fecha es obligatoria' })
+
+    if (SKIP_DB) {
+      const id = memId++
+      const rec = {
+        id,
+        fecha,
+        chofer: b.chofer || null,
+        camion: b.camion || null,
+        numero_pedido: b.numeroPedido || b.numero_pedido || null,
+        numero_factura: b.numeroFactura || b.numero_factura || null,
+        valor_factura: b.valorFactura != null ? Number(b.valorFactura) : (b.valor_factura != null ? Number(b.valor_factura) : null),
+        condicion_pago: b.condicionPago || b.condicion_pago || null,
+        cantidad: b.cantidad != null ? Number(b.cantidad) : null,
+        producto: b.producto || null,
+        local: b.local || null,
+        correo_enviado: (typeof b.correo_enviado !== 'undefined' || typeof b.correoEnviado !== 'undefined') ? ['true','1','on','yes'].includes(String(b.correo_enviado ?? b.correoEnviado).toLowerCase()) : null,
+        total: b.total != null ? Number(b.total) : null,
+        observaciones: b.observaciones || null,
+        created_at: new Date().toISOString(),
+      }
+      memRendiciones.unshift(rec)
+      return res.status(201).json({ ok: true, data: { id } })
+    }
+
+    const { rows } = await query(
+      `INSERT INTO rendiciones (fecha, chofer, camion, numero_pedido, numero_factura, valor_factura, condicion_pago, cantidad, producto, local, correo_enviado, total, observaciones)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+      [
+        fecha,
+        b.chofer || null,
+        b.camion || null,
+        b.numeroPedido || b.numero_pedido || null,
+        b.numeroFactura || b.numero_factura || null,
+        b.valorFactura != null ? Number(b.valorFactura) : (b.valor_factura != null ? Number(b.valor_factura) : null),
+        b.condicionPago || b.condicion_pago || null,
+        b.cantidad != null ? Number(b.cantidad) : null,
+        b.producto || null,
+        b.local || null,
+        (typeof b.correo_enviado !== 'undefined' || typeof b.correoEnviado !== 'undefined') ? ['true','1','on','yes'].includes(String(b.correo_enviado ?? b.correoEnviado).toLowerCase()) : null,
+        b.total != null ? Number(b.total) : null,
+        b.observaciones || null,
+      ]
+    )
+    return res.status(201).json({ ok: true, data: { id: rows[0].id } })
+  } catch (err) {
+    console.error('POST /api/rendiciones error:', err)
+    res.status(400).json({ ok: false, message: 'Error al crear rendición' })
+  }
+})
+
+// ===== Rutas: Status efímero (24h) =====
+// Limpieza periódica de status antiguos (> 24h)
+function cleanupRutaStatusMemory() {
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000
+  for (let i = memRutaStatus.length - 1; i >= 0; i--) {
+    const t = new Date(memRutaStatus[i].created_at || memRutaStatus[i].createdAt).getTime()
+    if (isFinite(t) && t < cutoff) memRutaStatus.splice(i, 1)
+  }
+}
+
+async function cleanupRutaStatusDb() {
+  try {
+    await query("DELETE FROM ruta_status WHERE created_at < NOW() - INTERVAL '1 day'")
+  } catch (e) {
+    console.error('cleanup ruta_status error:', e.message)
+  }
+}
+
+// GET /api/rutas/status — lista últimos 24h
+app.get('/api/rutas/status', requireAuth, async (_req, res) => {
+  try {
+    if (SKIP_DB) {
+      cleanupRutaStatusMemory()
+      // ordenar por created_at DESC
+      const rows = memRutaStatus.slice().sort((a,b) => new Date(b.created_at) - new Date(a.created_at))
+      return res.json({ ok: true, data: rows })
+    }
+    await cleanupRutaStatusDb()
+    const { rows } = await query(`
+      SELECT * FROM ruta_status
+      WHERE created_at >= NOW() - INTERVAL '1 day'
+      ORDER BY created_at DESC
+    `, [])
+    return res.json({ ok: true, data: rows })
+  } catch (e) {
+    console.error('GET /api/rutas/status error:', e)
+    res.status(500).json({ ok: false, message: 'Error al listar status' })
+  }
+})
+
+// POST /api/rutas/status — crear un status (admin/editor)
+app.post('/api/rutas/status', requireRoles(['admin','editor']), async (req, res) => {
+  try {
+    const b = req.body || {}
+    const route_code = b.route_code ?? b.routeCode
+    const status_text = b.status_text ?? b.statusText
+    if (!route_code || !status_text) return res.status(400).json({ ok: false, message: 'route_code y status_text son requeridos' })
+
+    if (SKIP_DB) {
+      const row = { id: memId++, route_code: String(route_code), status_text: String(status_text), created_at: new Date().toISOString() }
+      memRutaStatus.unshift(row)
+      return res.status(201).json({ ok: true, data: row })
+    }
+
+    const { rows } = await query('INSERT INTO ruta_status (route_code, status_text) VALUES ($1,$2) RETURNING *', [String(route_code), String(status_text)])
+    return res.status(201).json({ ok: true, data: rows[0] })
+  } catch (e) {
+    console.error('POST /api/rutas/status error:', e)
+    res.status(400).json({ ok: false, message: 'Error al crear status' })
+  }
+})
+
+// POST /api/rutas/status/generar — genera lote por defecto (admin/editor)
+app.post('/api/rutas/status/generar', requireRoles(['admin','editor']), async (_req, res) => {
+  try {
+    const defaults = [
+      { route_code: 'R1', status_text: 'EN ALC' },
+      { route_code: 'R2', status_text: 'EN PM' },
+      { route_code: 'R3', status_text: 'PN, CAMINO A PB' },
+      { route_code: 'R4', status_text: 'EN CC' },
+      { route_code: 'R5', status_text: 'CAMINO A PLD' },
+      { route_code: 'R6', status_text: 'CAMINO A CURRACARIBS' },
+      { route_code: 'R7', status_text: 'EGAÑA' },
+      { route_code: 'R8', status_text: 'CAMINO A TOB' },
+      { route_code: 'R9', status_text: 'CAMINO A PQA' },
+      { route_code: 'R10', status_text: 'CAMINO A VSP' },
+    ]
+    const nowIso = new Date().toISOString()
+
+    if (SKIP_DB) {
+      // Limpiar previos de más de 24h y reemplazar set actual
+      cleanupRutaStatusMemory()
+      // Opcional: quitar duplicados por route_code antes de insertar
+      for (let i = memRutaStatus.length - 1; i >= 0; i--) {
+        if (defaults.find(d => d.route_code === memRutaStatus[i].route_code)) memRutaStatus.splice(i,1)
+      }
+      for (const d of defaults) memRutaStatus.unshift({ id: memId++, ...d, created_at: nowIso })
+      return res.status(201).json({ ok: true, inserted: defaults.length })
+    }
+
+    // DB: insert simple por lote (sin upsert; son efímeros)
+    const values = []
+    const params = []
+    let i = 1
+    for (const d of defaults) {
+      params.push(d.route_code, d.status_text)
+      values.push(`($${i++}, $${i++})`)
+    }
+    await query(`INSERT INTO ruta_status (route_code, status_text) VALUES ${values.join(',')}`, params)
+    await cleanupRutaStatusDb()
+    return res.status(201).json({ ok: true, inserted: defaults.length })
+  } catch (e) {
+    console.error('POST /api/rutas/status/generar error:', e)
+    res.status(400).json({ ok: false, message: 'Error al generar status' })
+  }
+})
+
+// PUT /api/rutas/status/:id — editar código o texto del status (admin/editor)
+app.put('/api/rutas/status/:id', requireRoles(['admin','editor']), async (req, res) => {
+  const id = Number(req.params.id)
+  try {
+    const b = req.body || {}
+    const route_code = b.route_code ?? b.routeCode
+    const status_text = b.status_text ?? b.statusText
+
+    if (SKIP_DB) {
+      const idx = memRutaStatus.findIndex(r => r.id === id)
+      if (idx === -1) return res.status(404).json({ ok: false, message: 'Status no encontrado' })
+      const prev = memRutaStatus[idx]
+      const next = { ...prev }
+      if (route_code != null) next.route_code = String(route_code)
+      if (status_text != null) next.status_text = String(status_text)
+      memRutaStatus[idx] = next
+      return res.json({ ok: true, data: next })
+    }
+
+    // DB update
+    const fields = []
+    const params = []
+    if (route_code != null) { params.push(String(route_code)); fields.push(`route_code = $${params.length}`) }
+    if (status_text != null) { params.push(String(status_text)); fields.push(`status_text = $${params.length}`) }
+    if (!fields.length) return res.status(400).json({ ok: false, message: 'Nada para actualizar' })
+    params.push(id)
+    const { rows } = await query(`UPDATE ruta_status SET ${fields.join(', ')} WHERE id=$${params.length} RETURNING *`, params)
+    if (!rows.length) return res.status(404).json({ ok: false, message: 'Status no encontrado' })
+    return res.json({ ok: true, data: rows[0] })
+  } catch (e) {
+    console.error('PUT /api/rutas/status/:id error:', e)
+    res.status(400).json({ ok: false, message: 'Error al actualizar status' })
+  }
+})
+
+// DELETE /api/rutas/status/:id — eliminar status (admin/editor)
+app.delete('/api/rutas/status/:id', requireRoles(['admin','editor']), async (req, res) => {
+  const id = Number(req.params.id)
+  try {
+    if (SKIP_DB) {
+      const idx = memRutaStatus.findIndex(r => r.id === id)
+      if (idx === -1) return res.status(404).json({ ok: false, message: 'Status no encontrado' })
+      memRutaStatus.splice(idx, 1)
+      return res.json({ ok: true })
+    }
+    const { rowCount } = await query('DELETE FROM ruta_status WHERE id=$1', [id])
+    if (!rowCount) return res.status(404).json({ ok: false, message: 'Status no encontrado' })
+    return res.json({ ok: true })
+  } catch (e) {
+    console.error('DELETE /api/rutas/status/:id error:', e)
+    res.status(400).json({ ok: false, message: 'Error al eliminar status' })
+  }
+})
+
+// GET /api/rendiciones — listar con filtros simples
+app.get('/api/rendiciones', requireAuth, async (req, res) => {
+  try {
+    const { fecha, chofer, q, correo, limit = 50, offset = 0 } = req.query
+    const parseBool = (v) => {
+      if (v == null) return null
+      const s = String(v).toLowerCase()
+      if (['1','true','si','sí','on','yes'].includes(s)) return true
+      if (['0','false','no','off'].includes(s)) return false
+      return null
+    }
+    const correoVal = parseBool(correo)
+    if (SKIP_DB) {
+      let rows = memRendiciones.slice()
+      if (fecha) rows = rows.filter(r => String(r.fecha) === String(fecha))
+      if (chofer) rows = rows.filter(r => (r.chofer || '').toLowerCase().includes(String(chofer).toLowerCase()))
+      if (correoVal !== null) rows = rows.filter(r => r.correo_enviado === correoVal)
+      if (q) {
+        const n = String(q).toLowerCase()
+        rows = rows.filter(r => [r.chofer, r.camion, r.observaciones].map(x => String(x||'').toLowerCase()).some(v => v.includes(n)))
+      }
+      const start = Number(offset) || 0
+      const end = start + Math.min(200, Number(limit) || 50)
+      return res.json({ ok: true, data: rows.slice(start, end) })
+    }
+
+    const conds = []
+    const params = []
+    if (fecha) { params.push(fecha); conds.push(`fecha = $${params.length}`) }
+    if (chofer) { params.push(`%${chofer}%`); conds.push(`chofer ILIKE $${params.length}`) }
+    if (correoVal !== null) { params.push(correoVal); conds.push(`correo_enviado = $${params.length}`) }
+    if (q) { params.push(`%${q}%`); conds.push(`(chofer ILIKE $${params.length} OR camion ILIKE $${params.length} OR observaciones ILIKE $${params.length})`) }
+    const where = conds.length ? `WHERE ${conds.join(' AND ')}` : ''
+    params.push(Math.min(200, Number(limit)))
+    params.push(Number(offset))
+    const sql = `
+      SELECT * FROM rendiciones
+      ${where}
+      ORDER BY created_at DESC
+      LIMIT $${params.length - 1} OFFSET $${params.length}
+    `
+    const { rows } = await query(sql, params)
+    return res.json({ ok: true, data: rows })
+  } catch (err) {
+    console.error('GET /api/rendiciones error:', err)
+    res.status(500).json({ ok: false, message: 'Error al listar rendiciones' })
+  }
+})
+
+// PUT /api/rendiciones/:id — editar rendición
+app.put('/api/rendiciones/:id', requireRoles(['admin','editor']), async (req, res) => {
+  const id = Number(req.params.id)
+  try {
+    const b = req.body || {}
+    if (SKIP_DB) {
+      const idx = memRendiciones.findIndex(r => r.id === id)
+      if (idx === -1) return res.status(404).json({ ok: false, message: 'Rendición no encontrada' })
+      const prev = memRendiciones[idx]
+      const next = {
+        ...prev,
+        fecha: b.fecha ?? prev.fecha,
+        chofer: b.chofer ?? prev.chofer,
+        camion: b.camion ?? prev.camion,
+        total: b.total != null ? Number(b.total) : prev.total,
+        observaciones: b.observaciones ?? prev.observaciones,
+      }
+      memRendiciones[idx] = next
+      return res.json({ ok: true, data: next })
+    }
+
+    // Fetch prev to keep consistent types
+    const { rows: prevRows } = await query('SELECT * FROM rendiciones WHERE id=$1', [id])
+    if (!prevRows.length) return res.status(404).json({ ok: false, message: 'Rendición no encontrada' })
+    const prev = prevRows[0]
+    const values = {
+      fecha: b.fecha ?? prev.fecha,
+      chofer: b.chofer ?? prev.chofer,
+      camion: b.camion ?? prev.camion,
+      numero_pedido: (b.numeroPedido ?? b.numero_pedido) ?? prev.numero_pedido,
+      numero_factura: (b.numeroFactura ?? b.numero_factura) ?? prev.numero_factura,
+      valor_factura: (b.valorFactura != null ? Number(b.valorFactura) : (b.valor_factura != null ? Number(b.valor_factura) : prev.valor_factura)),
+      condicion_pago: (b.condicionPago ?? b.condicion_pago) ?? prev.condicion_pago,
+      cantidad: b.cantidad != null ? Number(b.cantidad) : prev.cantidad,
+      producto: b.producto ?? prev.producto,
+      local: b.local ?? prev.local,
+      correo_enviado: (typeof b.correo_enviado !== 'undefined' || typeof b.correoEnviado !== 'undefined') ? ['true','1','on','yes'].includes(String(b.correo_enviado ?? b.correoEnviado).toLowerCase()) : prev.correo_enviado,
+      total: b.total != null ? Number(b.total) : prev.total,
+      observaciones: b.observaciones ?? prev.observaciones,
+    }
+    const { rows } = await query(
+      'UPDATE rendiciones SET fecha=$1, chofer=$2, camion=$3, numero_pedido=$4, numero_factura=$5, valor_factura=$6, condicion_pago=$7, cantidad=$8, producto=$9, local=$10, correo_enviado=$11, total=$12, observaciones=$13 WHERE id=$14 RETURNING *',
+      [values.fecha, values.chofer, values.camion, values.numero_pedido, values.numero_factura, values.valor_factura, values.condicion_pago, values.cantidad, values.producto, values.local, values.correo_enviado, values.total, values.observaciones, id]
+    )
+    return res.json({ ok: true, data: rows[0] })
+  } catch (err) {
+    console.error('PUT /api/rendiciones/:id error:', err)
+    res.status(400).json({ ok: false, message: 'Error al actualizar rendición' })
+  }
+})
+
+// DELETE /api/rendiciones/:id — eliminar rendición
+app.delete('/api/rendiciones/:id', requireRoles(['admin','editor']), async (req, res) => {
+  const id = Number(req.params.id)
+  try {
+    if (SKIP_DB) {
+      const idx = memRendiciones.findIndex(r => r.id === id)
+      if (idx === -1) return res.status(404).json({ ok: false, message: 'Rendición no encontrada' })
+      memRendiciones.splice(idx, 1)
+      return res.json({ ok: true })
+    }
+    const { rowCount } = await query('DELETE FROM rendiciones WHERE id=$1', [id])
+    if (!rowCount) return res.status(404).json({ ok: false, message: 'Rendición no encontrada' })
+    return res.json({ ok: true })
+  } catch (err) {
+    console.error('DELETE /api/rendiciones/:id error:', err)
+    res.status(400).json({ ok: false, message: 'Error al eliminar rendición' })
+  }
+})
+
+// # GET /api/resguardos — listar resguardos con filtros básicos (auth requerida)
+app.get('/api/resguardos', requireAuth, async (req, res) => {
+  try {
+    const { cliente, fecha, guia, q, limit = 50, offset = 0 } = req.query
+    if (SKIP_DB) {
+      let rows = memResguardos.slice()
+      if (cliente) rows = rows.filter(r => String(r.cliente) === String(cliente))
+      if (fecha) rows = rows.filter(r => String(r.fecha_ingreso) === String(fecha))
+      if (guia) rows = rows.filter(r => String(r.guia || '').toLowerCase() === String(guia).toLowerCase())
+      if (q) {
+        const n = String(q).toLowerCase()
+        rows = rows.filter(r => [r.tipo, r.guia, r.cantidad, r.fecha_salida].map(x => String(x||'').toLowerCase()).some(v => v.includes(n)))
+      }
+      const start = Number(offset) || 0
+      const end = start + Math.min(200, Number(limit) || 50)
+      return res.json({ ok: true, data: rows.slice(start, end) })
+    }
+
+    const conds = []
+    const params = []
+    if (cliente) { params.push(Number(cliente)); conds.push(`r.cliente = $${params.length}`) }
+    if (fecha) { params.push(fecha); conds.push(`r.fecha_ingreso = $${params.length}`) }
+    if (guia) { params.push(guia); conds.push(`r.guia = $${params.length}`) }
+    if (q) {
+      params.push(`%${q}%`)
+      conds.push(`(r.tipo ILIKE $${params.length} OR r.guia ILIKE $${params.length})`)
+    }
+    params.push(Math.min(200, Number(limit)))
+    params.push(Number(offset))
+    const where = conds.length ? `WHERE ${conds.join(' AND ')}` : ''
+    const sql = `
+      SELECT r.*,
+        COALESCE(json_agg(json_build_object('filename', ra.filename, 'mimetype', ra.mimetype, 'size', ra.size))
+          FILTER (WHERE ra.id IS NOT NULL), '[]') AS archivos
+      FROM resguardos r
+      LEFT JOIN resguardo_archivos ra ON ra.resguardo_id = r.id
+      ${where}
+      GROUP BY r.id
+      ORDER BY r.created_at DESC
+      LIMIT $${params.length - 1} OFFSET $${params.length}
+    `
+    const { rows } = await query(sql, params)
+    res.json({ ok: true, data: rows })
+  } catch (err) {
+    console.error('GET /api/resguardos error:', err)
+    res.status(500).json({ ok: false, message: 'Error al listar resguardos' })
+  }
+})
+
+// # GET /api/facturas/export — exporta CSV con los mismos filtros que el listado
+app.get('/api/facturas/export', requireAuth, async (req, res) => {
+  try {
+    const { cliente, from: fromDate, to: toDate, fecha, guia, sort = '', q } = req.query
+
+    const toCsv = (rows) => {
+      const cols = [
+        'fecha','guia','conductor_xp','local','estado','cliente','kg','vueltas','camion','carga','observaciones','archivos'
+      ]
+      const esc = (v) => {
+        const s = v == null ? '' : String(v)
+        const need = /[",\n]/.test(s)
+        return need ? '"' + s.replaceAll('"','""') + '"' : s
+      }
+      const header = cols.join(',')
+      const clientMap = { 1: 'Brival', 2: 'Nutrisco', 3: 'Carnicero', 4: 'Gourmet' }
+      const lines = rows.map(r => {
+        const files = (r.archivos || []).map(a => a.filename).join(';')
+        const clienteNombre = r.cliente_name || clientMap[Number(r.cliente)] || r.cliente || ''
+        return [r.fecha, r.guia, r.conductor_xp, r.local, r.estado, clienteNombre, r.kg, r.vueltas, r.camion, r.carga, r.observaciones, files]
+          .map(esc).join(',')
+      })
+      return [header, ...lines].join('\n')
+    }
+
+    if (SKIP_DB) {
+      let rows = memFacturas.slice();
+      if (cliente) rows = rows.filter((f) => String(f.cliente) === String(cliente));
+      if (fromDate) rows = rows.filter((f) => f.fecha >= fromDate);
+      if (toDate) rows = rows.filter((f) => f.fecha <= toDate);
+      if (fecha) rows = rows.filter((f) => String(f.fecha) === String(fecha));
+      if (guia) rows = rows.filter((f) => String(f.guia || '').toLowerCase() === String(guia).toLowerCase());
+      if (q) {
+        const needle = String(q).toLowerCase();
+        rows = rows.filter((f) =>
+          [f.guia, f.conductor_xp, f.camion, f.local, f.carga, f.observaciones]
+            .map((x) => (x || "").toLowerCase())
+            .some((v) => v.includes(needle))
+        );
+      }
+      if (sort === 'guia_asc' || sort === 'guia_desc') {
+        const dir = sort === 'guia_asc' ? 1 : -1;
+        const num = (s) => {
+          const n = parseInt(String(s || '').replace(/\D/g, ''), 10);
+          if (Number.isFinite(n)) return n;
+          return dir === 1 ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY;
+        };
+        rows.sort((a, b) => (num(a.guia) - num(b.guia)) * dir);
+      }
+      const csv = toCsv(rows)
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+      res.setHeader('Content-Disposition', `attachment; filename="facturas-export-${Date.now()}.csv"`)
+      return res.send('\uFEFF' + csv) // BOM para Excel
+    }
+
+    const conds = []
+    const params = []
+    if (cliente) { params.push(Number(cliente)); conds.push(`cliente = $${params.length}`) }
+    if (fromDate) { params.push(fromDate); conds.push(`fecha >= $${params.length}`) }
+    if (toDate) { params.push(toDate); conds.push(`fecha <= $${params.length}`) }
+    if (fecha) { params.push(fecha); conds.push(`fecha = $${params.length}`) }
+    if (guia) { params.push(guia); conds.push(`guia = $${params.length}`) }
+    if (q) {
+      params.push(`%${q}%`)
+      conds.push(`(
+        guia ILIKE $${params.length} OR
+        conductor_xp ILIKE $${params.length} OR
+        camion ILIKE $${params.length} OR
+        local ILIKE $${params.length} OR
+        carga ILIKE $${params.length} OR
+        observaciones ILIKE $${params.length}
+      )`)
+    }
+    const where = conds.length ? `WHERE ${conds.join(' AND ')}` : ''
+    let orderClause = 'ORDER BY f.created_at DESC'
+    // Evitar error de casteo con guías vacías: usar NULLIF(...,'')::bigint
+    const guiaNumExpr = "NULLIF(regexp_replace(COALESCE(f.guia,''), '\\D','','g'), '')::bigint"
+    if (String(sort) === 'guia_asc') orderClause = `ORDER BY ${guiaNumExpr} ASC NULLS LAST`
+    else if (String(sort) === 'guia_desc') orderClause = `ORDER BY ${guiaNumExpr} DESC NULLS LAST`
+
+    const sql = `
+      SELECT f.*, c.name AS cliente_name,
+        COALESCE(json_agg(json_build_object('filename', fa.filename, 'mimetype', fa.mimetype, 'size', fa.size))
+          FILTER (WHERE fa.id IS NOT NULL), '[]') AS archivos
+      FROM facturas f
+      LEFT JOIN factura_archivos fa ON fa.factura_id = f.id
+      LEFT JOIN clients c ON c.id = f.cliente
+      ${where}
+      GROUP BY f.id, c.name
+      ${orderClause}
+    `
+    const { rows } = await query(sql, params)
+    const csv = toCsv(rows)
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+    res.setHeader('Content-Disposition', `attachment; filename="facturas-export-${Date.now()}.csv"`)
+    return res.send('\uFEFF' + csv)
+  } catch (err) {
+    console.error('GET /api/facturas/export error:', err)
+    res.status(500).json({ ok: false, message: 'Error al exportar facturas' })
+  }
+})
+
+// # GET /api/resguardos/export — exporta CSV de resguardos
+app.get('/api/resguardos/export', requireAuth, async (req, res) => {
+  try {
+    const { cliente, fecha, guia, q } = req.query
+    const toCsv = (rows) => {
+      const cols = ['fecha_ingreso','cliente','nombre','guia','cantidad','tipo','fecha_salida','archivos']
+      const esc = (v) => {
+        const s = v == null ? '' : String(v)
+        const need = /[",\n]/.test(s)
+        return need ? '"' + s.replaceAll('"','""') + '"' : s
+      }
+      const header = cols.join(',')
+      const clientMap = { 1: 'Brival', 2: 'Nutrisco', 3: 'Carnicero', 4: 'Gourmet' }
+      const lines = rows.map(r => {
+        const files = (r.archivos || []).map(a => a.filename).join(';')
+        const clienteNombre = r.cliente_name || clientMap[Number(r.cliente)] || r.cliente || ''
+        return [r.fecha_ingreso, clienteNombre, r.nombre, r.guia, r.cantidad, r.tipo, r.fecha_salida, files].map(esc).join(',')
+      })
+      return [header, ...lines].join('\n')
+    }
+
+    if (SKIP_DB) {
+      let rows = memResguardos.slice()
+      if (cliente) rows = rows.filter(r => String(r.cliente) === String(cliente))
+      if (fecha) rows = rows.filter(r => String(r.fecha_ingreso) === String(fecha))
+      if (guia) rows = rows.filter(r => String(r.guia || '').toLowerCase() === String(guia).toLowerCase())
+      if (q) {
+        const n = String(q).toLowerCase()
+        rows = rows.filter(r => [r.tipo, r.guia, r.nombre, r.cantidad, r.fecha_salida].map(x => String(x||'').toLowerCase()).some(v => v.includes(n)))
+      }
+      const csv = toCsv(rows)
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+      res.setHeader('Content-Disposition', `attachment; filename="resguardos-export-${Date.now()}.csv"`)
+      return res.send('\uFEFF' + csv)
+    }
+
+    const conds = []
+    const params = []
+    if (cliente) { params.push(Number(cliente)); conds.push(`r.cliente = $${params.length}`) }
+    if (fecha) { params.push(fecha); conds.push(`r.fecha_ingreso = $${params.length}`) }
+    if (guia) { params.push(guia); conds.push(`r.guia = $${params.length}`) }
+    if (q) { params.push(`%${q}%`); conds.push(`(r.tipo ILIKE $${params.length} OR r.guia ILIKE $${params.length} OR r.nombre ILIKE $${params.length})`) }
+    const where = conds.length ? `WHERE ${conds.join(' AND ')}` : ''
+    const sql = `
+      SELECT r.*, c.name AS cliente_name,
+        COALESCE(json_agg(json_build_object('filename', ra.filename, 'mimetype', ra.mimetype, 'size', ra.size))
+          FILTER (WHERE ra.id IS NOT NULL), '[]') AS archivos
+      FROM resguardos r
+      LEFT JOIN resguardo_archivos ra ON ra.resguardo_id = r.id
+      LEFT JOIN clients c ON c.id = r.cliente
+      ${where}
+      GROUP BY r.id, c.name
+      ORDER BY r.created_at DESC
+    `
+    const { rows } = await query(sql, params)
+    const csv = toCsv(rows)
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+    res.setHeader('Content-Disposition', `attachment; filename="resguardos-export-${Date.now()}.csv"`)
+    return res.send('\uFEFF' + csv)
+  } catch (err) {
+    console.error('GET /api/resguardos/export error:', err)
+    res.status(500).json({ ok: false, message: 'Error al exportar resguardos' })
+  }
+})
+
+// # GET /api/facturas/stats — métricas simples por estado (filtros: cliente, fecha, estado)
+// Lenguaje simple: cuenta cuántas facturas hay y cuántas están “entregadas”.
+// Lenguaje técnico: agrega por columna estado (CASE-insensitive) y sintetiza
+//   total y la suma de estados que empiezan por 'entregado%'. Acepta query
+//   string "cliente" para filtrar por cliente (SMALLINT 1..4 en este proyecto).
+//   Además soporta "fecha" (YYYY-MM-DD) y "estado" (nombre exacto). Si
+//   "estado" se envía, se cuenta solo ese estado; si no, se agrupa por
+//   prefijo 'entregado%'.
+app.get('/api/facturas/stats', requireAuth, async (req, res) => {
+  try {
+    const { cliente, fecha, estado } = req.query
+
+    if (SKIP_DB) {
+      // Modo memoria: trabajamos sobre el arreglo memFacturas
+      let rows = memFacturas.slice()
+      if (cliente) rows = rows.filter(f => String(f.cliente) === String(cliente))
+      if (fecha) rows = rows.filter(f => String(f.fecha) === String(fecha))
+      const by_estado = {}
+      for (const f of rows) {
+        const e = (f.estado || '').trim().toLowerCase()
+        by_estado[e] = (by_estado[e] || 0) + 1
+      }
+      const total = rows.length
+      const entregada = estado
+        ? (by_estado[String(estado).toLowerCase()] || 0)
+        : Object.entries(by_estado)
+            .filter(([k]) => k.startsWith('entregado'))
+            .reduce((a, [, v]) => a + v, 0)
+      return res.json({ ok: true, data: { total, entregada, by_estado } })
+    }
+
+    // Modo DB: un GROUP BY y post-procesado en Node para armar el shape final
+    const conds = []
+    const params = []
+    if (cliente) { params.push(Number(cliente)); conds.push(`cliente = $${params.length}`) }
+    if (fecha) { params.push(fecha); conds.push(`fecha = $${params.length}`) }
+    const where = conds.length ? `WHERE ${conds.join(' AND ')}` : ''
+    const sql = `
+      SELECT COALESCE(estado,'') AS estado, COUNT(*)::int AS c
+      FROM facturas
+      ${where}
+      GROUP BY COALESCE(estado,'')
+    `
+    const { rows } = await query(sql, params)
+    const by_estado = {}
+    let total = 0
+    for (const r of rows) { by_estado[String(r.estado).toLowerCase()] = r.c; total += r.c }
+    const entregada = estado
+      ? (by_estado[String(estado).toLowerCase()] || 0)
+      : Object.entries(by_estado)
+          .filter(([k]) => k.startsWith('entregado'))
+          .reduce((a, [, v]) => a + v, 0)
+    return res.json({ ok: true, data: { total, entregada, by_estado } })
+  } catch (err) {
+    console.error('GET /api/facturas/stats error:', err)
+    res.status(500).json({ ok: false, message: 'Error al obtener estadísticas' })
+  }
+})
+
+// # GET /api/rendiciones/export — exporta CSV con filtros fecha/chofer/q
+app.get('/api/rendiciones/export', requireAuth, async (req, res) => {
+  try {
+    const { fecha, chofer, q } = req.query
+
+    const toCsv = (rows) => {
+      const cols = ['fecha','chofer','camion','producto','cantidad','local','numero_pedido','numero_factura','valor_factura','condicion_pago','correo','total','observaciones']
+      const esc = (v) => {
+        const s = v == null ? '' : String(v)
+        const need = /[",\n]/.test(s)
+        return need ? '"' + s.replaceAll('"','""') + '"' : s
+      }
+      const header = cols.join(',')
+      const lines = rows.map(r => [
+        r.fecha,
+        r.chofer,
+        r.camion,
+        r.producto,
+        r.cantidad,
+        r.local,
+        r.numero_pedido,
+        r.numero_factura,
+        r.valor_factura,
+        r.condicion_pago,
+        (r.correo_enviado === true ? 'correcto' : r.correo_enviado === false ? 'incorrecto' : ''),
+        r.total,
+        r.observaciones,
+      ].map(esc).join(','))
+      return [header, ...lines].join('\n')
+    }
+
+    if (SKIP_DB) {
+      let rows = memRendiciones.slice()
+      if (fecha) rows = rows.filter(r => String(r.fecha) === String(fecha))
+      if (chofer) rows = rows.filter(r => (r.chofer || '').toLowerCase().includes(String(chofer).toLowerCase()))
+      if (q) {
+        const n = String(q).toLowerCase()
+        rows = rows.filter(r => [r.chofer, r.camion, r.observaciones, r.numero_pedido, r.numero_factura, r.condicion_pago]
+          .map(x => String(x||'').toLowerCase()).some(v => v.includes(n)))
+      }
+      const csv = toCsv(rows)
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+      res.setHeader('Content-Disposition', `attachment; filename="rendiciones-export-${Date.now()}.csv"`)
+      return res.send('\uFEFF' + csv)
+    }
+
+    const conds = []
+    const params = []
+    if (fecha) { params.push(fecha); conds.push(`fecha = $${params.length}`) }
+    if (chofer) { params.push(`%${chofer}%`); conds.push(`chofer ILIKE $${params.length}`) }
+    if (q) { params.push(`%${q}%`); conds.push(`(chofer ILIKE $${params.length} OR camion ILIKE $${params.length} OR observaciones ILIKE $${params.length} OR numero_pedido ILIKE $${params.length} OR numero_factura ILIKE $${params.length} OR condicion_pago ILIKE $${params.length})`) }
+    const where = conds.length ? `WHERE ${conds.join(' AND ')}` : ''
+    const sql = `SELECT fecha, chofer, camion, producto, cantidad, local, numero_pedido, numero_factura, valor_factura, condicion_pago, correo_enviado, total, observaciones FROM rendiciones ${where} ORDER BY created_at DESC`
+    const { rows } = await query(sql, params)
+    const csv = toCsv(rows)
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+    res.setHeader('Content-Disposition', `attachment; filename="rendiciones-export-${Date.now()}.csv"`)
+    return res.send('\uFEFF' + csv)
+  } catch (err) {
+    console.error('GET /api/rendiciones/export error:', err)
+    res.status(500).json({ ok: false, message: 'Error al exportar rendiciones' })
+  }
+})
+
+// # PUT /api/resguardos/:id — editar campos básicos del resguardo
+app.put('/api/resguardos/:id', requireRoles(['admin','editor']), async (req, res) => {
+  const id = Number(req.params.id)
+  try {
+    const b = req.body || {}
+    if (SKIP_DB) {
+      const idx = memResguardos.findIndex(r => r.id === id)
+      if (idx === -1) return res.status(404).json({ ok: false, message: 'Resguardo no encontrado' })
+      const prev = memResguardos[idx]
+      const next = {
+        ...prev,
+        cantidad: b.cantidad != null ? Number(b.cantidad) : prev.cantidad,
+        tipo: b.tipo ?? prev.tipo,
+        nombre: b.nombre ?? prev.nombre,
+        guia: b.guia ?? prev.guia,
+        cliente: b.cliente != null ? Number(b.cliente) : prev.cliente,
+        fecha_ingreso: b.fecha_ingreso ?? prev.fecha_ingreso,
+        fecha_salida: b.fecha_salida ?? prev.fecha_salida,
+      }
+      memResguardos[idx] = next
+      return res.json({ ok: true, data: next })
+    }
+
+    const { rows: prevRows } = await query('SELECT * FROM resguardos WHERE id=$1', [id])
+    if (!prevRows.length) return res.status(404).json({ ok: false, message: 'Resguardo no encontrado' })
+    const prev = prevRows[0]
+    const values = {
+      cantidad: b.cantidad != null ? Number(b.cantidad) : prev.cantidad,
+      tipo: b.tipo ?? prev.tipo,
+      nombre: b.nombre ?? prev.nombre,
+      guia: b.guia ?? prev.guia,
+      cliente: b.cliente != null ? Number(b.cliente) : prev.cliente,
+      fecha_ingreso: b.fecha_ingreso ?? prev.fecha_ingreso,
+      fecha_salida: b.fecha_salida ?? prev.fecha_salida,
+    }
+    const sql = `
+      UPDATE resguardos
+      SET cantidad=$1, tipo=$2, nombre=$3, guia=$4, cliente=$5, fecha_ingreso=$6, fecha_salida=$7
+      WHERE id=$8
+      RETURNING *
+    `
+    const { rows } = await query(sql, [
+      values.cantidad,
+      values.tipo,
+      values.nombre,
+      values.guia,
+      values.cliente,
+      values.fecha_ingreso,
+      values.fecha_salida,
+      id,
+    ])
+    return res.json({ ok: true, data: rows[0] })
+  } catch (err) {
+    console.error('PUT /api/resguardos/:id error:', err)
+    res.status(400).json({ ok: false, message: err.message || 'Error al editar resguardo' })
+  }
+})
+
+// # DELETE /api/resguardos/:id — eliminar resguardo y sus archivos
+app.delete('/api/resguardos/:id', requireRoles(['admin','editor']), async (req, res) => {
+  const id = Number(req.params.id)
+  try {
+    if (SKIP_DB) {
+      const idx = memResguardos.findIndex(r => r.id === id)
+      if (idx === -1) return res.status(404).json({ ok: false, message: 'Resguardo no encontrado' })
+      // intentar borrar archivos físicos si existen
+      try {
+        const files = memResguardos[idx].archivos || []
+        for (const f of files) {
+          const p = path.join(uploadsDir, f.filename)
+          try { fs.unlinkSync(p) } catch {}
+        }
+      } catch {}
+      memResguardos.splice(idx, 1)
+      return res.json({ ok: true })
+    }
+
+    // Obtener archivos para borrarlos del disco
+    const { rows: files } = await query('SELECT filename FROM resguardo_archivos WHERE resguardo_id=$1', [id])
+    await query('DELETE FROM resguardos WHERE id=$1', [id])
+    for (const row of files) {
+      const p = path.join(uploadsDir, row.filename)
+      try { fs.unlinkSync(p) } catch {}
+    }
+    return res.json({ ok: true })
+  } catch (err) {
+    console.error('DELETE /api/resguardos/:id error:', err)
+    res.status(400).json({ ok: false, message: err.message || 'Error al eliminar resguardo' })
+  }
+})
+
+// # GET /api/facturas — Listado de facturas con filtros (cliente, fecha exacta, guia exacta, búsqueda general)
+app.get("/api/facturas", requireAuth, async (req, res) => {
   try {
     const {
       cliente,
@@ -144,6 +1246,7 @@ app.get("/api/facturas", async (req, res) => {
       to: toDate,
       fecha,
       guia,
+      sort = '',
       q,
       limit = 50,
       offset = 0,
@@ -163,6 +1266,41 @@ app.get("/api/facturas", async (req, res) => {
             .map((x) => (x || "").toLowerCase())
             .some((v) => v.includes(needle))
         );
+      }
+      // Orden en modo memoria
+      if (sort === 'guia_asc' || sort === 'guia_desc') {
+        const dir = sort === 'guia_asc' ? 1 : -1;
+        const num = (s) => {
+          const n = parseInt(String(s || '').replace(/\D/g, ''), 10);
+          if (Number.isFinite(n)) return n;
+          // Empujar vacíos al final/principio según dirección
+          return dir === 1 ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY;
+        };
+        rows.sort((a, b) => (num(a.guia) - num(b.guia)) * dir);
+      } else if (sort === 'kg_asc' || sort === 'kg_desc') {
+        const dir = sort === 'kg_asc' ? 1 : -1
+        rows.sort((a, b) => {
+          const av = Number(a.kg); const bv = Number(b.kg)
+          const aa = Number.isFinite(av) ? av : (dir === 1 ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY)
+          const bb = Number.isFinite(bv) ? bv : (dir === 1 ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY)
+          return (aa - bb) * dir
+        })
+      } else if (sort === 'vueltas_asc' || sort === 'vueltas_desc') {
+        const dir = sort === 'vueltas_asc' ? 1 : -1
+        rows.sort((a, b) => {
+          const av = Number(a.vueltas); const bv = Number(b.vueltas)
+          const aa = Number.isFinite(av) ? av : (dir === 1 ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY)
+          const bb = Number.isFinite(bv) ? bv : (dir === 1 ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY)
+          return (aa - bb) * dir
+        })
+      } else if (sort === 'fecha_asc' || sort === 'fecha_desc') {
+        const dir = sort === 'fecha_asc' ? 1 : -1
+        rows.sort((a, b) => {
+          const av = String(a.fecha || '')
+          const bv = String(b.fecha || '')
+          if (av === bv) return 0
+          return (av < bv ? -1 : 1) * dir
+        })
       }
       const start = Number(offset) || 0;
       const end = start + Math.min(200, Number(limit) || 50);
@@ -208,6 +1346,28 @@ app.get("/api/facturas", async (req, res) => {
     params.push(Number(offset))
 
     const where = conds.length ? `WHERE ${conds.join(" AND ")}` : ""
+    // Orden solicitado; por defecto fecha de creación
+    const sortParam = String(sort || '')
+    let orderClause = 'ORDER BY f.created_at DESC'
+    // Evitar casteo inválido: si no hay dígitos, usar NULL y ordenar con NULLS LAST
+    const guiaNumExpr = "NULLIF(regexp_replace(COALESCE(f.guia,''), '\\D','','g'), '')::bigint"
+    if (sortParam === 'guia_asc') {
+      orderClause = `ORDER BY ${guiaNumExpr} ASC NULLS LAST`
+    } else if (sortParam === 'guia_desc') {
+      orderClause = `ORDER BY ${guiaNumExpr} DESC NULLS LAST`
+    } else if (sortParam === 'kg_asc') {
+      orderClause = 'ORDER BY f.kg ASC NULLS LAST'
+    } else if (sortParam === 'kg_desc') {
+      orderClause = 'ORDER BY f.kg DESC NULLS LAST'
+    } else if (sortParam === 'vueltas_asc') {
+      orderClause = 'ORDER BY f.vueltas ASC NULLS LAST'
+    } else if (sortParam === 'vueltas_desc') {
+      orderClause = 'ORDER BY f.vueltas DESC NULLS LAST'
+    } else if (sortParam === 'fecha_asc') {
+      orderClause = 'ORDER BY f.fecha ASC NULLS LAST'
+    } else if (sortParam === 'fecha_desc') {
+      orderClause = 'ORDER BY f.fecha DESC NULLS LAST'
+    }
     const sql = `
       SELECT f.*,
         COALESCE(json_agg(json_build_object('filename', fa.filename, 'mimetype', fa.mimetype, 'size', fa.size))
@@ -216,7 +1376,7 @@ app.get("/api/facturas", async (req, res) => {
       LEFT JOIN factura_archivos fa ON fa.factura_id = f.id
       ${where}
       GROUP BY f.id
-      ORDER BY f.created_at DESC
+      ${orderClause}
       LIMIT $${params.length - 1} OFFSET $${params.length}
     `
     const { rows } = await query(sql, params)
@@ -224,6 +1384,94 @@ app.get("/api/facturas", async (req, res) => {
   } catch (err) {
     console.error("GET /api/facturas error:", err)
     res.status(500).json({ ok: false, message: "Error al listar facturas" })
+  }
+})
+
+// # POST /api/facturas/bulk-delete — elimina facturas por filtros (solo admin/editor)
+// Seguridad: requiere al menos un filtro (cliente/fecha/from/to/guia/q) para evitar borrar todo.
+app.post('/api/facturas/bulk-delete', requireRoles(['admin','editor']), async (req, res) => {
+  try {
+    const { cliente, from: fromDate, to: toDate, fecha, guia, q } = req.body || {}
+
+    // Validación: no permitir borrado sin filtros
+    if (!cliente && !fromDate && !toDate && !fecha && !guia && !q) {
+      return res.status(400).json({ ok: false, message: 'Debes especificar al menos un filtro para eliminar (cliente, fecha, rango, guía o búsqueda).' })
+    }
+
+    if (SKIP_DB) {
+      // Filtrar en memoria, recolectar archivos y eliminar
+      let rows = memFacturas.slice();
+      if (cliente) rows = rows.filter((f) => String(f.cliente) === String(cliente));
+      if (fromDate) rows = rows.filter((f) => f.fecha >= fromDate);
+      if (toDate) rows = rows.filter((f) => f.fecha <= toDate);
+      if (fecha) rows = rows.filter((f) => String(f.fecha) === String(fecha));
+      if (guia) rows = rows.filter((f) => String(f.guia || '').toLowerCase() === String(guia).toLowerCase());
+      if (q) {
+        const needle = String(q).toLowerCase();
+        rows = rows.filter((f) =>
+          [f.guia, f.conductor_xp, f.camion, f.local, f.carga, f.observaciones]
+            .map((x) => (x || "").toLowerCase())
+            .some((v) => v.includes(needle))
+        );
+      }
+      const ids = new Set(rows.map(r => r.id))
+      // Borrar archivos físicos asociados
+      for (const r of rows) {
+        try {
+          for (const a of (r.archivos || [])) {
+            const p = path.join(uploadsDir, a.filename)
+            try { fs.unlinkSync(p) } catch {}
+          }
+        } catch {}
+      }
+      // Eliminar del arreglo
+      let kept = 0
+      for (let i = memFacturas.length - 1; i >= 0; i--) {
+        if (ids.has(memFacturas[i].id)) memFacturas.splice(i, 1)
+        else kept++
+      }
+      return res.json({ ok: true, deleted: rows.length })
+    }
+
+    // DB mode: construir condiciones como en el listado
+    const conds = []
+    const params = []
+    if (cliente) { params.push(Number(cliente)); conds.push(`cliente = $${params.length}`) }
+    if (fromDate) { params.push(fromDate); conds.push(`fecha >= $${params.length}`) }
+    if (toDate) { params.push(toDate); conds.push(`fecha <= $${params.length}`) }
+    if (fecha) { params.push(fecha); conds.push(`fecha = $${params.length}`) }
+    if (guia) { params.push(guia); conds.push(`guia = $${params.length}`) }
+    if (q) {
+      params.push(`%${q}%`)
+      conds.push(`(
+        guia ILIKE $${params.length} OR
+        conductor_xp ILIKE $${params.length} OR
+        camion ILIKE $${params.length} OR
+        local ILIKE $${params.length} OR
+        carga ILIKE $${params.length} OR
+        observaciones ILIKE $${params.length}
+      )`)
+    }
+    const where = conds.length ? `WHERE ${conds.join(' AND ')}` : ''
+
+    // Obtener IDs a eliminar
+    const { rows: idRows } = await query(`SELECT id FROM facturas ${where}`, params)
+    const ids = idRows.map(r => r.id)
+    if (!ids.length) return res.json({ ok: true, deleted: 0 })
+
+    // Obtener archivos físicos para borrarlos del disco
+    const { rows: fileRows } = await query('SELECT filename FROM factura_archivos WHERE factura_id = ANY($1::int[])', [ids])
+    for (const row of fileRows) {
+      const p = path.join(uploadsDir, row.filename)
+      try { fs.unlinkSync(p) } catch {}
+    }
+
+    // Eliminar facturas (cascade: archivos + historial)
+    await query('DELETE FROM facturas WHERE id = ANY($1::int[])', [ids])
+    return res.json({ ok: true, deleted: ids.length })
+  } catch (err) {
+    console.error('POST /api/facturas/bulk-delete error:', err)
+    res.status(400).json({ ok: false, message: err.message || 'Error al eliminar facturas' })
   }
 })
 
@@ -237,6 +1485,160 @@ app.get("/files/:filename", (req, res) => {
   return res.download(filePath, name)
 })
 
+// ===== Planificaciones: importar Excel -> JSON =====
+app.post('/api/planificaciones/import', requireRoles(['admin','editor']), uploadExcel.single('file'), async (req, res) => {
+  try {
+    const filePath = req.file?.path
+    if (!filePath) return res.status(400).json({ ok: false, message: 'Archivo requerido' })
+    // Leer Excel preservando fechas como objetos y formatos de celda
+    const wb = xlsx.readFile(filePath, { cellDates: true, cellNF: true, cellText: false })
+    const sheetName = wb.SheetNames[0]
+    const sheet = wb.Sheets[sheetName]
+    // Convertir a JSON respetando formato de celda (raw:false usa la representación formateada)
+    const rowsRaw = xlsx.utils.sheet_to_json(sheet, { defval: '', raw: false })
+
+    // Normalizar fechas/horas que puedan venir como números seriales
+    const DATE_KEYS = new Set(['fecha','fecha despacho','fecha de despacho','fecha_despacho'])
+    const TIME_KEYS = new Set(['hora','hora despacho','hora de despacho','hora_despacho'])
+    const pad2 = (n) => String(n).padStart(2, '0')
+    const normalize = (k, v) => {
+      if (typeof v !== 'number') return v
+      const dc = xlsx.SSF.parse_date_code(v)
+      if (!dc) return v
+      const key = k.toLowerCase().trim()
+      if (DATE_KEYS.has(key) && Number.isFinite(dc.y)) {
+        return `${dc.y}-${pad2(dc.m)}-${pad2(dc.d)}`
+      }
+      if (TIME_KEYS.has(key)) {
+        return `${pad2(dc.H)}:${pad2(dc.M)}`
+      }
+      return v
+    }
+    const rows = rowsRaw.map(r => {
+      const o = { }
+      for (const [k, v] of Object.entries(r)) o[k] = normalize(k, v)
+      return o
+    })
+    // Limpieza del archivo físico (no necesitamos guardarlo)
+    try { fs.unlinkSync(filePath) } catch {}
+    return res.json({ ok: true, data: rows })
+  } catch (e) {
+    console.error('POST /api/planificaciones/import error:', e)
+    return res.status(400).json({ ok: false, message: 'Error al procesar Excel' })
+  }
+})
+
+// Guardar planificación (Excel + campos extra) en DB
+app.post('/api/planificaciones', requireRoles(['admin','editor']), async (req, res) => {
+  try {
+    const rows = req.body?.rows
+    const cliente = req.body?.cliente ? Number(req.body.cliente) : null
+    const fecha = req.body?.fecha || null
+    const descripcion = req.body?.descripcion || null
+    if (!Array.isArray(rows) || rows.length === 0) return res.status(400).json({ ok: false, message: 'rows requerido (array)' })
+    const { rows: r } = await query('INSERT INTO planificaciones (cliente, fecha, descripcion, rows) VALUES ($1,$2,$3,$4::jsonb) RETURNING id, created_at', [cliente, fecha, descripcion, JSON.stringify(rows)])
+    return res.status(201).json({ ok: true, data: r[0] })
+  } catch (e) {
+    console.error('POST /api/planificaciones error:', e)
+    return res.status(400).json({ ok: false, message: 'Error al guardar planificación' })
+  }
+})
+
+// Listar planificaciones (filtros: cliente, fecha)
+app.get('/api/planificaciones', requireAuth, async (req, res) => {
+  try {
+    if (SKIP_DB) return res.json({ ok: true, data: [] })
+    const { cliente, fecha, limit = 50, offset = 0 } = req.query
+    const conds = []
+    const params = []
+    if (cliente) { params.push(Number(cliente)); conds.push(`p.cliente = $${params.length}`) }
+    if (fecha) { params.push(fecha); conds.push(`p.fecha = $${params.length}`) }
+    params.push(Math.min(200, Number(limit)))
+    params.push(Number(offset))
+    const where = conds.length ? `WHERE ${conds.join(' AND ')}` : ''
+    const sql = `
+      SELECT p.id, p.cliente, c.name AS cliente_name, p.fecha, p.descripcion, p.created_at,
+             COALESCE(jsonb_array_length(p.rows), 0) AS items
+      FROM planificaciones p
+      LEFT JOIN clients c ON c.id = p.cliente
+      ${where}
+      ORDER BY p.created_at DESC
+      LIMIT $${params.length - 1} OFFSET $${params.length}
+    `
+    const { rows } = await query(sql, params)
+    res.json({ ok: true, data: rows })
+  } catch (e) {
+    console.error('GET /api/planificaciones error:', e)
+    res.status(500).json({ ok: false, message: 'Error al listar planificaciones' })
+  }
+})
+
+// Obtener detalle (incluye filas JSON)
+app.get('/api/planificaciones/:id', requireAuth, async (req, res) => {
+  try {
+    if (SKIP_DB) return res.status(404).json({ ok: false, message: 'No disponible en modo sin DB' })
+    const id = Number(req.params.id)
+    const { rows } = await query('SELECT id, cliente, fecha, descripcion, rows, created_at FROM planificaciones WHERE id=$1', [id])
+    if (!rows.length) return res.status(404).json({ ok: false, message: 'Planificación no encontrada' })
+    res.json({ ok: true, data: rows[0] })
+  } catch (e) {
+    console.error('GET /api/planificaciones/:id error:', e)
+    res.status(500).json({ ok: false, message: 'Error al obtener planificación' })
+  }
+})
+
+// Exportar CSV de una planificación (detalle de filas)
+app.get('/api/planificaciones/:id/export', requireAuth, async (req, res) => {
+  try {
+    if (SKIP_DB) return res.status(404).json({ ok: false, message: 'No disponible en modo sin DB' })
+    const id = Number(req.params.id)
+    const { rows } = await query('SELECT rows FROM planificaciones WHERE id=$1', [id])
+    if (!rows.length) return res.status(404).json({ ok: false, message: 'Planificación no encontrada' })
+    const data = rows[0].rows || []
+    if (!Array.isArray(data) || data.length === 0) {
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+      res.setHeader('Content-Disposition', `attachment; filename="planificacion-${id}.csv"`)
+      return res.send('\uFEFF')
+    }
+    // headers: unión de todas las claves
+    const keys = Array.from(data.reduce((s, r) => { Object.keys(r).forEach(k => s.add(k)); return s }, new Set()))
+    const esc = (v) => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? '"' + s.replaceAll('"','""') + '"' : s }
+    const header = keys.join(',')
+    const lines = data.map(r => keys.map(k => esc(r[k])).join(','))
+    const csv = [header, ...lines].join('\n')
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+    res.setHeader('Content-Disposition', `attachment; filename="planificacion-${id}.csv"`)
+    return res.send('\uFEFF' + csv)
+  } catch (e) {
+    console.error('GET /api/planificaciones/:id/export error:', e)
+    res.status(500).json({ ok: false, message: 'Error al exportar planificación' })
+  }
+})
+
+// Actualizar planificación (filas y/o metadatos)
+app.put('/api/planificaciones/:id', requireRoles(['admin','editor']), async (req, res) => {
+  try {
+    if (SKIP_DB) return res.status(404).json({ ok: false, message: 'No disponible en modo sin DB' })
+    const id = Number(req.params.id)
+    const { rows: prev } = await query('SELECT id FROM planificaciones WHERE id=$1', [id])
+    if (!prev.length) return res.status(404).json({ ok: false, message: 'Planificación no encontrada' })
+
+    const fields = []
+    const params = []
+    if (typeof req.body?.cliente !== 'undefined') { params.push(req.body.cliente == null ? null : Number(req.body.cliente)); fields.push(`cliente = $${params.length}`) }
+    if (typeof req.body?.fecha !== 'undefined')   { params.push(req.body.fecha || null); fields.push(`fecha = $${params.length}`) }
+    if (typeof req.body?.descripcion !== 'undefined') { params.push(req.body.descripcion || null); fields.push(`descripcion = $${params.length}`) }
+    if (Array.isArray(req.body?.rows)) { params.push(JSON.stringify(req.body.rows)); fields.push(`rows = $${params.length}::jsonb`) }
+    if (!fields.length) return res.status(400).json({ ok: false, message: 'Nada para actualizar' })
+    params.push(id)
+    const { rows } = await query(`UPDATE planificaciones SET ${fields.join(', ')} WHERE id=$${params.length} RETURNING id, cliente, fecha, descripcion, created_at`, params)
+    res.json({ ok: true, data: rows[0] })
+  } catch (e) {
+    console.error('PUT /api/planificaciones/:id error:', e)
+    res.status(400).json({ ok: false, message: 'Error al actualizar planificación' })
+  }
+})
+
 // Servir archivo inline para previsualización (imagen/pdf)
 app.get("/files/inline/:filename", (req, res) => {
   const name = path.basename(req.params.filename || "")
@@ -248,7 +1650,7 @@ app.get("/files/inline/:filename", (req, res) => {
 })
 
 // Editar factura y registrar historial
-app.put("/api/facturas/:id", async (req, res) => {
+app.put("/api/facturas/:id", requireRoles(['admin','editor']), async (req, res) => {
   const id = Number(req.params.id)
   try {
     const b = req.body || {}
@@ -340,7 +1742,7 @@ app.put("/api/facturas/:id", async (req, res) => {
 })
 
 // Obtener historial de cambios de una factura
-app.get('/api/facturas/:id/historial', async (req, res) => {
+app.get('/api/facturas/:id/historial', requireAuth, async (req, res) => {
   const id = Number(req.params.id)
   try {
     if (SKIP_DB) {
@@ -383,6 +1785,8 @@ const PORT = Number(process.env.PORT) || 4000;
   try {
     if (!SKIP_DB) {
       await initDb()
+      await ensureSeed()
+      console.log("Base de datos conectada e inicializada correctamente")
     } else {
       console.log("SKIP_DB_INIT activo: corriendo en modo sin base de datos")
     }
