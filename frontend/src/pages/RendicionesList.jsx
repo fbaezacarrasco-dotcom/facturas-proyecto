@@ -200,7 +200,7 @@ function RendicionesList({ getAuthHeaders, canEdit }) {
   return (
     <div>
       <h2 style={{ marginTop: 0 }}>Rendiciones</h2>
-      <div className="filters">
+      <div className="filters sticky-filters">
         <input type="date" name="fecha" value={filters.fecha} onChange={onChange} />
         <input name="chofer" value={filters.chofer} onChange={onChange} placeholder="Chofer" />
         <input name="q" value={filters.q} onChange={onChange} placeholder="Buscar general" />

@@ -31,6 +31,7 @@ function Modal({ open, onClose, children, title }) {
 }
 
 function EditResguardoForm({ item, onClose, onSaved, getAuthHeaders }) {
+  const clientes = useClientes(getAuthHeaders)
   const [form, setForm] = useState({
     cantidad: item.cantidad ?? '',
     tipo: item.tipo || 'seco',
@@ -119,12 +120,14 @@ function EditResguardoForm({ item, onClose, onSaved, getAuthHeaders }) {
 
 function InventarioList({ getAuthHeaders, canEdit }) {
   const clientes = useClientes(getAuthHeaders)
+  const clientMap = useMemo(() => Object.fromEntries((clientes || []).map(c => [String(c.value), c.label])), [clientes])
   const [filters, setFilters] = useState({ cliente: '', fecha: '', guia: '', q: '' })
   const [data, setData] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [preview, setPreview] = useState({ open: false, src: '' })
   const [editing, setEditing] = useState(null)
+  const [details, setDetails] = useState({ open: false, item: null })
 
   const queryString = useMemo(() => {
     const p = new URLSearchParams()
@@ -176,7 +179,7 @@ function InventarioList({ getAuthHeaders, canEdit }) {
   return (
     <div>
       <h2 style={{ marginTop: 0 }}>Inventario (resguardos)</h2>
-      <div className="filters">
+      <div className="filters sticky-filters">
         <select name="cliente" value={filters.cliente} onChange={onChange}>
           {clientes.map((c) => (<option key={c.value} value={c.value}>{c.label}</option>))}
         </select>
@@ -199,6 +202,7 @@ function InventarioList({ getAuthHeaders, canEdit }) {
             <tr>
               <th>Fecha ingreso</th>
               <th>Cliente</th>
+              <th>Ruta</th>
               <th>Producto</th>
               <th>N° factura</th>
               <th>Cantidad</th>
@@ -212,7 +216,8 @@ function InventarioList({ getAuthHeaders, canEdit }) {
             {data.map((r) => (
               <tr key={r.id}>
                 <td>{r.fecha_ingreso}</td>
-                <td>{String(r.cliente)}</td>
+                <td>{clientMap[String(r.cliente)] || String(r.cliente)}</td>
+                <td>{r.ruta || ''}</td>
                 <td>{r.nombre || ''}</td>
                 <td>{r.guia || ''}</td>
                 <td>{r.cantidad}</td>
@@ -231,6 +236,13 @@ function InventarioList({ getAuthHeaders, canEdit }) {
                   ))}
                 </td>
                 <td>
+                  <button
+                    className="menu-button"
+                    style={{ width: 'auto', marginRight: 6 }}
+                    onClick={() => setDetails({ open: true, item: r })}
+                  >
+                    Detalles
+                  </button>
                   {canEdit && (
                     <>
                       <button className="menu-button" style={{ width: 'auto', marginRight: 6 }} onClick={() => setEditing(r)}>
@@ -278,6 +290,39 @@ function InventarioList({ getAuthHeaders, canEdit }) {
       <Modal open={!!editing} onClose={() => setEditing(null)} title={`Editar resguardo #${editing?.id}`}>
         {editing && (
           <EditResguardoForm item={editing} onClose={() => setEditing(null)} onSaved={load} getAuthHeaders={getAuthHeaders} />
+        )}
+      </Modal>
+
+      <Modal open={details.open} onClose={() => setDetails({ open: false, item: null })} title={`Detalles resguardo #${details.item?.id || ''}`}>
+        {details.item && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div><strong>Fecha ingreso</strong><br />{details.item.fecha_ingreso || ''}</div>
+            <div><strong>Fecha salida</strong><br />{details.item.fecha_salida || '—'}</div>
+            <div><strong>Cliente</strong><br />{clientMap[String(details.item.cliente)] || String(details.item.cliente)}</div>
+            <div><strong>Ruta</strong><br />{details.item.ruta || '—'}</div>
+            <div><strong>Producto</strong><br />{details.item.nombre || '—'}</div>
+            <div><strong>N° factura</strong><br />{details.item.guia || '—'}</div>
+            <div><strong>Cantidad</strong><br />{details.item.cantidad != null ? details.item.cantidad : '—'}</div>
+            <div><strong>Tipo</strong><br />{details.item.tipo || '—'}</div>
+            <div className="full" style={{ gridColumn: '1 / -1' }}>
+              <strong>Archivos</strong>
+              <div>
+                {(details.item.archivos || []).length === 0 ? '—' : (
+                  (details.item.archivos || []).map((a, i) => (
+                    <span key={i} style={{ marginRight: 8, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      <img
+                        src={`/files/inline/${a.filename}`}
+                        alt={a.filename}
+                        className="thumb"
+                        onClick={() => setPreview({ open: true, src: `/files/inline/${a.filename}` })}
+                      />
+                      <a href={`/files/${a.filename}`} download={a.filename}>Descargar</a>
+                    </span>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
         )}
       </Modal>
     </div>

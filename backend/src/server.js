@@ -152,6 +152,25 @@ app.get('/api/clients', requireAuth, async (_req, res) => {
   }
 })
 
+// Historial de una ruta (todas las actualizaciones)
+app.get('/api/rutas/status/historial', requireAuth, async (req, res) => {
+  try {
+    const route = String(req.query.route || '').trim()
+    if (!route) return res.status(400).json({ ok: false, message: 'Parámetro route requerido' })
+    if (SKIP_DB) {
+      const items = memRutaStatusHistory
+        .filter(h => h.route_code === route)
+        .sort((a,b) => new Date(b.created_at) - new Date(a.created_at))
+      return res.json({ ok: true, data: items })
+    }
+    const { rows } = await query('SELECT id, route_code, status_text, created_at FROM ruta_status_historial WHERE route_code=$1 ORDER BY created_at DESC', [route])
+    return res.json({ ok: true, data: rows })
+  } catch (e) {
+    console.error('GET /api/rutas/status/historial error:', e)
+    res.status(400).json({ ok: false, message: 'Error al obtener historial' })
+  }
+})
+
 // # POST /auth/login — autenticar usuario y emitir JWT
 app.post('/auth/login', async (req, res) => {
   try {
@@ -337,6 +356,12 @@ let memId = 1;
 const memResguardos = [];
 const memRendiciones = [];
 const memRutaStatus = [];
+const memRutaStatusHistory = [];
+const memCamiones = [];
+const memCamionBajas = [];
+const memMantenciones = [];
+const memProveedores = [];
+const memOrdenes = [];
 
 // # POST /api/facturas — Crear factura (DB o memoria)
 app.post("/api/facturas", requireRoles(['admin','editor']), upload.array("archivos", 5), async (req, res) => {
@@ -412,8 +437,8 @@ app.post("/api/facturas", requireRoles(['admin','editor']), upload.array("archiv
   }
 })
 
-// # POST /api/resguardos — crear registro de resguardo (máx 3 imágenes)
-app.post("/api/resguardos", requireRoles(['admin','editor']), upload.array("imagenes", 3), async (req, res) => {
+// # POST /api/resguardos — crear registro de resguardo (máx 5 imágenes)
+app.post("/api/resguardos", requireRoles(['admin','editor']), upload.array("imagenes", 5), async (req, res) => {
   try {
     const b = req.body || {}
     const cantidad = b.cantidad ? Number(b.cantidad) : null
@@ -434,6 +459,7 @@ app.post("/api/resguardos", requireRoles(['admin','editor']), upload.array("imag
         nombre: b.nombre || null,
         guia: b.guia || null,
         cliente,
+        ruta: b.ruta || null,
         fecha_ingreso: fechaIngreso,
         fecha_salida: b.fecha_salida || null,
         archivos: files.map((f) => ({ filename: f.filename, mimetype: f.mimetype, size: f.size })),
@@ -443,8 +469,8 @@ app.post("/api/resguardos", requireRoles(['admin','editor']), upload.array("imag
     }
 
     const sql = `
-      INSERT INTO resguardos (cantidad, tipo, nombre, guia, cliente, fecha_ingreso, fecha_salida)
-      VALUES ($1,$2,$3,$4,$5,$6,$7)
+      INSERT INTO resguardos (cantidad, tipo, nombre, guia, cliente, fecha_ingreso, fecha_salida, ruta)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
       RETURNING id
     `
     const { rows } = await query(sql, [
@@ -455,6 +481,7 @@ app.post("/api/resguardos", requireRoles(['admin','editor']), upload.array("imag
       cliente,
       fechaIngreso,
       b.fecha_salida || null,
+      b.ruta || null,
     ])
     const id = rows[0].id
     if (files.length) {
@@ -578,10 +605,14 @@ app.post('/api/rutas/status', requireRoles(['admin','editor']), async (req, res)
     if (SKIP_DB) {
       const row = { id: memId++, route_code: String(route_code), status_text: String(status_text), created_at: new Date().toISOString() }
       memRutaStatus.unshift(row)
+      // Registrar en historial
+      memRutaStatusHistory.unshift({ id: memId++, route_code: row.route_code, status_text: row.status_text, created_at: row.created_at })
       return res.status(201).json({ ok: true, data: row })
     }
 
     const { rows } = await query('INSERT INTO ruta_status (route_code, status_text) VALUES ($1,$2) RETURNING *', [String(route_code), String(status_text)])
+    // Registrar en historial
+    await query('INSERT INTO ruta_status_historial (route_code, status_text) VALUES ($1,$2)', [String(route_code), String(status_text)])
     return res.status(201).json({ ok: true, data: rows[0] })
   } catch (e) {
     console.error('POST /api/rutas/status error:', e)
@@ -613,7 +644,11 @@ app.post('/api/rutas/status/generar', requireRoles(['admin','editor']), async (_
       for (let i = memRutaStatus.length - 1; i >= 0; i--) {
         if (defaults.find(d => d.route_code === memRutaStatus[i].route_code)) memRutaStatus.splice(i,1)
       }
-      for (const d of defaults) memRutaStatus.unshift({ id: memId++, ...d, created_at: nowIso })
+      for (const d of defaults) {
+        const row = { id: memId++, ...d, created_at: nowIso }
+        memRutaStatus.unshift(row)
+        memRutaStatusHistory.unshift({ id: memId++, route_code: row.route_code, status_text: row.status_text, created_at: row.created_at })
+      }
       return res.status(201).json({ ok: true, inserted: defaults.length })
     }
 
@@ -626,6 +661,7 @@ app.post('/api/rutas/status/generar', requireRoles(['admin','editor']), async (_
       values.push(`($${i++}, $${i++})`)
     }
     await query(`INSERT INTO ruta_status (route_code, status_text) VALUES ${values.join(',')}`, params)
+    await query(`INSERT INTO ruta_status_historial (route_code, status_text) VALUES ${values.join(',')}`, params)
     await cleanupRutaStatusDb()
     return res.status(201).json({ ok: true, inserted: defaults.length })
   } catch (e) {
@@ -650,6 +686,8 @@ app.put('/api/rutas/status/:id', requireRoles(['admin','editor']), async (req, r
       if (route_code != null) next.route_code = String(route_code)
       if (status_text != null) next.status_text = String(status_text)
       memRutaStatus[idx] = next
+      // Registrar en historial
+      memRutaStatusHistory.unshift({ id: memId++, route_code: next.route_code, status_text: next.status_text, created_at: new Date().toISOString() })
       return res.json({ ok: true, data: next })
     }
 
@@ -662,7 +700,9 @@ app.put('/api/rutas/status/:id', requireRoles(['admin','editor']), async (req, r
     params.push(id)
     const { rows } = await query(`UPDATE ruta_status SET ${fields.join(', ')} WHERE id=$${params.length} RETURNING *`, params)
     if (!rows.length) return res.status(404).json({ ok: false, message: 'Status no encontrado' })
-    return res.json({ ok: true, data: rows[0] })
+    const updated = rows[0]
+    await query('INSERT INTO ruta_status_historial (route_code, status_text) VALUES ($1,$2)', [updated.route_code, updated.status_text])
+    return res.json({ ok: true, data: updated })
   } catch (e) {
     console.error('PUT /api/rutas/status/:id error:', e)
     res.status(400).json({ ok: false, message: 'Error al actualizar status' })
@@ -1164,6 +1204,7 @@ app.put('/api/resguardos/:id', requireRoles(['admin','editor']), async (req, res
         cliente: b.cliente != null ? Number(b.cliente) : prev.cliente,
         fecha_ingreso: b.fecha_ingreso ?? prev.fecha_ingreso,
         fecha_salida: b.fecha_salida ?? prev.fecha_salida,
+        ruta: b.ruta ?? prev.ruta,
       }
       memResguardos[idx] = next
       return res.json({ ok: true, data: next })
@@ -1180,11 +1221,12 @@ app.put('/api/resguardos/:id', requireRoles(['admin','editor']), async (req, res
       cliente: b.cliente != null ? Number(b.cliente) : prev.cliente,
       fecha_ingreso: b.fecha_ingreso ?? prev.fecha_ingreso,
       fecha_salida: b.fecha_salida ?? prev.fecha_salida,
+      ruta: b.ruta ?? prev.ruta,
     }
     const sql = `
       UPDATE resguardos
-      SET cantidad=$1, tipo=$2, nombre=$3, guia=$4, cliente=$5, fecha_ingreso=$6, fecha_salida=$7
-      WHERE id=$8
+      SET cantidad=$1, tipo=$2, nombre=$3, guia=$4, cliente=$5, fecha_ingreso=$6, fecha_salida=$7, ruta=$8
+      WHERE id=$9
       RETURNING *
     `
     const { rows } = await query(sql, [
@@ -1195,6 +1237,7 @@ app.put('/api/resguardos/:id', requireRoles(['admin','editor']), async (req, res
       values.cliente,
       values.fecha_ingreso,
       values.fecha_salida,
+      values.ruta,
       id,
     ])
     return res.json({ ok: true, data: rows[0] })
@@ -1536,7 +1579,7 @@ app.post('/api/planificaciones', requireRoles(['admin','editor']), async (req, r
     const fecha = req.body?.fecha || null
     const descripcion = req.body?.descripcion || null
     if (!Array.isArray(rows) || rows.length === 0) return res.status(400).json({ ok: false, message: 'rows requerido (array)' })
-    const { rows: r } = await query('INSERT INTO planificaciones (cliente, fecha, descripcion, rows) VALUES ($1,$2,$3,$4::jsonb) RETURNING id, created_at', [cliente, fecha, descripcion, JSON.stringify(rows)])
+    const { rows: r } = await query('INSERT INTO planificaciones (cliente, fecha, descripcion, rows) VALUES ($1,$2,$3,$4::jsonb) RETURNING id, version, created_at, updated_at', [cliente, fecha, descripcion, JSON.stringify(rows)])
     return res.status(201).json({ ok: true, data: r[0] })
   } catch (e) {
     console.error('POST /api/planificaciones error:', e)
@@ -1557,7 +1600,7 @@ app.get('/api/planificaciones', requireAuth, async (req, res) => {
     params.push(Number(offset))
     const where = conds.length ? `WHERE ${conds.join(' AND ')}` : ''
     const sql = `
-      SELECT p.id, p.cliente, c.name AS cliente_name, p.fecha, p.descripcion, p.created_at,
+      SELECT p.id, p.cliente, c.name AS cliente_name, p.fecha, p.descripcion, p.version, p.created_at, p.updated_at,
              COALESCE(jsonb_array_length(p.rows), 0) AS items
       FROM planificaciones p
       LEFT JOIN clients c ON c.id = p.cliente
@@ -1578,7 +1621,7 @@ app.get('/api/planificaciones/:id', requireAuth, async (req, res) => {
   try {
     if (SKIP_DB) return res.status(404).json({ ok: false, message: 'No disponible en modo sin DB' })
     const id = Number(req.params.id)
-    const { rows } = await query('SELECT id, cliente, fecha, descripcion, rows, created_at FROM planificaciones WHERE id=$1', [id])
+    const { rows } = await query('SELECT id, cliente, fecha, descripcion, rows, version, created_at, updated_at FROM planificaciones WHERE id=$1', [id])
     if (!rows.length) return res.status(404).json({ ok: false, message: 'Planificación no encontrada' })
     res.json({ ok: true, data: rows[0] })
   } catch (e) {
@@ -1620,8 +1663,14 @@ app.put('/api/planificaciones/:id', requireRoles(['admin','editor']), async (req
   try {
     if (SKIP_DB) return res.status(404).json({ ok: false, message: 'No disponible en modo sin DB' })
     const id = Number(req.params.id)
-    const { rows: prev } = await query('SELECT id FROM planificaciones WHERE id=$1', [id])
+    const { rows: prev } = await query('SELECT id, version FROM planificaciones WHERE id=$1', [id])
     if (!prev.length) return res.status(404).json({ ok: false, message: 'Planificación no encontrada' })
+    const currentVersion = prev[0].version
+    const sentVersion = req.body?.version != null ? Number(req.body.version) : null
+    if (sentVersion == null) return res.status(400).json({ ok: false, message: 'version requerida' })
+    if (sentVersion !== currentVersion) {
+      return res.status(409).json({ ok: false, message: 'Conflicto de versión: la planificación fue actualizada por otro usuario', currentVersion })
+    }
 
     const fields = []
     const params = []
@@ -1629,13 +1678,30 @@ app.put('/api/planificaciones/:id', requireRoles(['admin','editor']), async (req
     if (typeof req.body?.fecha !== 'undefined')   { params.push(req.body.fecha || null); fields.push(`fecha = $${params.length}`) }
     if (typeof req.body?.descripcion !== 'undefined') { params.push(req.body.descripcion || null); fields.push(`descripcion = $${params.length}`) }
     if (Array.isArray(req.body?.rows)) { params.push(JSON.stringify(req.body.rows)); fields.push(`rows = $${params.length}::jsonb`) }
+    // Bump version y updated_at
+    fields.push(`version = ${currentVersion + 1}`)
+    fields.push(`updated_at = NOW()`)
     if (!fields.length) return res.status(400).json({ ok: false, message: 'Nada para actualizar' })
     params.push(id)
-    const { rows } = await query(`UPDATE planificaciones SET ${fields.join(', ')} WHERE id=$${params.length} RETURNING id, cliente, fecha, descripcion, created_at`, params)
+    const { rows } = await query(`UPDATE planificaciones SET ${fields.join(', ')} WHERE id=$${params.length} RETURNING id, cliente, fecha, descripcion, version, created_at, updated_at`, params)
     res.json({ ok: true, data: rows[0] })
   } catch (e) {
     console.error('PUT /api/planificaciones/:id error:', e)
     res.status(400).json({ ok: false, message: 'Error al actualizar planificación' })
+  }
+})
+
+// Eliminar planificación
+app.delete('/api/planificaciones/:id', requireRoles(['admin','editor']), async (req, res) => {
+  try {
+    if (SKIP_DB) return res.status(404).json({ ok: false, message: 'No disponible en modo sin DB' })
+    const id = Number(req.params.id)
+    const { rowCount } = await query('DELETE FROM planificaciones WHERE id=$1', [id])
+    if (!rowCount) return res.status(404).json({ ok: false, message: 'Planificación no encontrada' })
+    res.json({ ok: true })
+  } catch (e) {
+    console.error('DELETE /api/planificaciones/:id error:', e)
+    res.status(400).json({ ok: false, message: 'Error al eliminar planificación' })
   }
 })
 
@@ -1649,6 +1715,402 @@ app.get("/files/inline/:filename", (req, res) => {
   return res.sendFile(filePath)
 })
 
+// ===== Camiones =====
+// Listar camiones con documentos
+app.get('/api/camiones', requireAuth, async (req, res) => {
+  try {
+    if (SKIP_DB) {
+      const rows = memCamiones.slice().sort((a,b) => new Date(b.created_at) - new Date(a.created_at))
+      return res.json({ ok: true, data: rows })
+    }
+    const { rows } = await query(`
+      SELECT c.*,
+        COALESCE(json_agg(json_build_object('filename', d.filename, 'mimetype', d.mimetype, 'size', d.size))
+          FILTER (WHERE d.id IS NOT NULL), '[]') AS documentos
+      FROM camiones c
+      LEFT JOIN camion_documentos d ON d.camion_id = c.id
+      GROUP BY c.id
+      ORDER BY c.created_at DESC
+    `, [])
+    return res.json({ ok: true, data: rows })
+  } catch (e) {
+    console.error('GET /api/camiones error:', e)
+    res.status(500).json({ ok: false, message: 'Error al listar camiones' })
+  }
+})
+
+// Crear camión con documentos
+app.post('/api/camiones', requireRoles(['admin','editor']), upload.array('documentos', 5), async (req, res) => {
+  try {
+    const b = req.body || {}
+    const patente = String(b.patente || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '')
+    const modelo = String(b.modelo || '').trim()
+    const ano = b.ano ? Number(String(b.ano).replace(/\D/g,'')) : null
+    const marca = String(b.marca || '').trim()
+    const kilometraje = b.kilometraje != null ? Number(String(b.kilometraje).replace(/\D/g,'')) : null
+    const fecha_entrada = b.fecha_entrada || b.fechaEntrada || null
+    const fecha_salida = b.fecha_salida || b.fechaSalida || null
+
+    // Validaciones
+    if (!patente || patente.length !== 6) return res.status(400).json({ ok: false, message: 'Patente debe tener 6 caracteres' })
+    if (modelo && /[^a-zA-ZÁÉÍÓÚÑáéíóúñ\s-]/.test(modelo)) return res.status(400).json({ ok: false, message: 'Modelo solo letras' })
+    if (ano != null && (!/^[0-9]{1,4}$/.test(String(b.ano)))) return res.status(400).json({ ok: false, message: 'Año debe ser numérico (máx 4)' })
+    if (marca && /[^a-zA-ZÁÉÍÓÚÑáéíóúñ\s-]/.test(marca)) return res.status(400).json({ ok: false, message: 'Marca solo letras' })
+    if (kilometraje != null && !Number.isFinite(kilometraje)) return res.status(400).json({ ok: false, message: 'Kilometraje debe ser numérico' })
+    if (!fecha_entrada) return res.status(400).json({ ok: false, message: 'Fecha de entrada requerida' })
+
+    const files = req.files || []
+
+    if (SKIP_DB) {
+      const row = {
+        id: memId++, patente, modelo: modelo || null, ano: ano || null, marca: marca || null,
+        kilometraje: kilometraje || 0, fecha_entrada, fecha_salida: fecha_salida || null,
+        documentos: files.map(f => ({ filename: f.filename, mimetype: f.mimetype, size: f.size })),
+        created_at: new Date().toISOString(),
+      }
+      memCamiones.unshift(row)
+      return res.status(201).json({ ok: true, data: row })
+    }
+
+    const { rows: inserted } = await query(
+      'INSERT INTO camiones (patente, modelo, ano, marca, kilometraje, fecha_entrada, fecha_salida) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *',
+      [patente, modelo || null, ano || null, marca || null, kilometraje || 0, fecha_entrada, fecha_salida || null]
+    )
+    const cam = inserted[0]
+    if (files.length) {
+      for (const f of files) {
+        await query('INSERT INTO camion_documentos (camion_id, filename, mimetype, size) VALUES ($1,$2,$3,$4)', [cam.id, f.filename, f.mimetype, f.size])
+      }
+    }
+    return res.status(201).json({ ok: true, data: cam })
+  } catch (e) {
+    console.error('POST /api/camiones error:', e)
+    res.status(400).json({ ok: false, message: e.message || 'Error al crear camión' })
+  }
+})
+
+// Actualizar datos de camión
+app.put('/api/camiones/:id', requireRoles(['admin','editor']), async (req, res) => {
+  const id = Number(req.params.id)
+  try {
+    const b = req.body || {}
+    const fields = {}
+    if (b.patente != null) {
+      const p = String(b.patente).trim().toUpperCase().replace(/[^A-Z0-9]/g, '')
+      if (p.length !== 6) return res.status(400).json({ ok: false, message: 'Patente debe tener 6 caracteres' })
+      fields.patente = p
+    }
+    if (b.modelo != null) {
+      const m = String(b.modelo).replace(/[^a-zA-ZÁÉÍÓÚÑáéíóúñ\s-]/g,'')
+      fields.modelo = m
+    }
+    if (b.ano != null) {
+      const a = String(b.ano).replace(/\D/g,'').slice(0,4)
+      if (a && !/^[0-9]{1,4}$/.test(a)) return res.status(400).json({ ok: false, message: 'Año inválido' })
+      fields.ano = a ? Number(a) : null
+    }
+    if (b.marca != null) {
+      const mk = String(b.marca).replace(/[^a-zA-ZÁÉÍÓÚÑáéíóúñ\s-]/g,'').trim()
+      fields.marca = mk
+    }
+    if (b.kilometraje != null) {
+      const km = Number(String(b.kilometraje).replace(/\D/g,''))
+      if (!Number.isFinite(km)) return res.status(400).json({ ok: false, message: 'Kilometraje inválido' })
+      fields.kilometraje = km
+    }
+    if (b.fecha_entrada != null) fields.fecha_entrada = b.fecha_entrada
+    if (b.fecha_salida != null) fields.fecha_salida = b.fecha_salida || null
+
+    if (SKIP_DB) {
+      const idx = memCamiones.findIndex(c => c.id === id)
+      if (idx === -1) return res.status(404).json({ ok: false, message: 'Camión no encontrado' })
+      memCamiones[idx] = { ...memCamiones[idx], ...fields }
+      return res.json({ ok: true, data: memCamiones[idx] })
+    }
+
+    const sets = []
+    const params = []
+    for (const [k, v] of Object.entries(fields)) {
+      params.push(v)
+      sets.push(`${k} = $${params.length}`)
+    }
+    if (!sets.length) return res.status(400).json({ ok: false, message: 'Nada para actualizar' })
+    params.push(id)
+    const { rows } = await query(`UPDATE camiones SET ${sets.join(', ')} WHERE id=$${params.length} RETURNING *`, params)
+    if (!rows.length) return res.status(404).json({ ok: false, message: 'Camión no encontrado' })
+    return res.json({ ok: true, data: rows[0] })
+  } catch (e) {
+    console.error('PUT /api/camiones/:id error:', e)
+    res.status(400).json({ ok: false, message: e.message || 'Error al actualizar camión' })
+  }
+})
+
+// Eliminar camión (requiere motivo)
+app.delete('/api/camiones/:id', requireRoles(['admin','editor']), async (req, res) => {
+  const id = Number(req.params.id)
+  try {
+    const reason = (req.body && req.body.reason) ? String(req.body.reason).trim() : ''
+    if (!reason) return res.status(400).json({ ok: false, message: 'Motivo de eliminación requerido' })
+
+    if (SKIP_DB) {
+      const idx = memCamiones.findIndex(c => c.id === id)
+      if (idx === -1) return res.status(404).json({ ok: false, message: 'Camión no encontrado' })
+      try {
+        for (const d of (memCamiones[idx].documentos || [])) {
+          const p = path.join(uploadsDir, d.filename)
+          try { fs.unlinkSync(p) } catch {}
+        }
+      } catch {}
+      memCamionBajas.unshift({ id: memId++, camion_id: id, reason, created_at: new Date().toISOString() })
+      memCamiones.splice(idx, 1)
+      return res.json({ ok: true })
+    }
+
+    const { rows: files } = await query('SELECT filename FROM camion_documentos WHERE camion_id=$1', [id])
+    await query('INSERT INTO camion_bajas (camion_id, reason) VALUES ($1,$2)', [id, reason])
+    const { rowCount } = await query('DELETE FROM camiones WHERE id=$1', [id])
+    if (!rowCount) return res.status(404).json({ ok: false, message: 'Camión no encontrado' })
+    for (const r of files) {
+      const p = path.join(uploadsDir, r.filename)
+      try { fs.unlinkSync(p) } catch {}
+    }
+    return res.json({ ok: true })
+  } catch (e) {
+    console.error('DELETE /api/camiones/:id error:', e)
+    res.status(400).json({ ok: false, message: e.message || 'Error al eliminar camión' })
+  }
+})
+
+// ===== Mantenciones =====
+// Crear mantención
+app.post('/api/mantenciones', requireRoles(['admin','editor']), async (req, res) => {
+  try {
+    const b = req.body || {}
+    let camionId = b.camion_id ? Number(b.camion_id) : null
+    const patente = String(b.patente || '').trim().toUpperCase().replace(/[^A-Z0-9]/g,'')
+    const tarea = String(b.tarea || '').trim()
+    const tipo = String(b.tipo_control || b.tipo || '').toLowerCase()
+    const fecha = b.fecha_control || b.fecha
+    let km_antiguo = b.km_antiguo != null ? Number(b.km_antiguo) : null
+    const km_nuevo = b.km_nuevo != null ? Number(b.km_nuevo) : null
+    const intervalo_dias = b.intervalo_dias != null ? Number(b.intervalo_dias) : null
+
+    if (!camionId && patente) {
+      if (SKIP_DB) {
+        const c = memCamiones.find(x => x.patente === patente)
+        if (c) camionId = c.id
+      } else {
+        const { rows } = await query('SELECT id, kilometraje FROM camiones WHERE patente=$1', [patente])
+        if (rows.length) {
+          camionId = rows[0].id
+          if (km_antiguo == null) km_antiguo = rows[0].kilometraje
+        }
+      }
+    }
+
+    if (!camionId) return res.status(400).json({ ok: false, message: 'camion_id o patente requeridos' })
+    if (!tarea) return res.status(400).json({ ok: false, message: 'tarea requerida' })
+    if (!['preventivo','urgente'].includes(tipo)) return res.status(400).json({ ok: false, message: 'tipo_control debe ser preventivo o urgente' })
+    if (!fecha) return res.status(400).json({ ok: false, message: 'fecha_control requerida' })
+    if (!intervalo_dias || !Number.isFinite(intervalo_dias) || intervalo_dias <= 0) return res.status(400).json({ ok: false, message: 'intervalo_dias requerido (>0)' })
+
+    if (SKIP_DB) {
+      if (km_antiguo == null) {
+        const c = memCamiones.find(x => x.id === camionId)
+        km_antiguo = c?.kilometraje ?? null
+      }
+      const row = { id: memId++, camion_id: camionId, tarea, tipo_control: tipo, fecha_control: fecha, km_antiguo, km_nuevo, intervalo_dias, created_at: new Date().toISOString() }
+      memMantenciones.unshift(row)
+      return res.status(201).json({ ok: true, data: row })
+    }
+
+    if (km_antiguo == null) {
+      const { rows } = await query('SELECT kilometraje FROM camiones WHERE id=$1', [camionId])
+      km_antiguo = rows.length ? rows[0].kilometraje : null
+    }
+    const { rows } = await query(
+      'INSERT INTO mantenciones (camion_id, tarea, tipo_control, fecha_control, km_antiguo, km_nuevo, intervalo_dias) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *',
+      [camionId, tarea, tipo, fecha, km_antiguo, km_nuevo, intervalo_dias]
+    )
+    return res.status(201).json({ ok: true, data: rows[0] })
+  } catch (e) {
+    console.error('POST /api/mantenciones error:', e)
+    res.status(400).json({ ok: false, message: e.message || 'Error al crear mantención' })
+  }
+})
+
+// Listar mantenciones (últimas)
+app.get('/api/mantenciones', requireAuth, async (req, res) => {
+  try {
+    if (SKIP_DB) {
+      const rows = memMantenciones.map(m => ({ ...m, patente: (memCamiones.find(c => c.id === m.camion_id)?.patente) || '' }))
+      return res.json({ ok: true, data: rows })
+    }
+    const { rows } = await query(`
+      SELECT m.*, c.patente FROM mantenciones m
+      LEFT JOIN camiones c ON c.id = m.camion_id
+      ORDER BY m.created_at DESC
+      LIMIT 200
+    `, [])
+    return res.json({ ok: true, data: rows })
+  } catch (e) {
+    console.error('GET /api/mantenciones error:', e)
+    res.status(500).json({ ok: false, message: 'Error al listar mantenciones' })
+  }
+})
+
+// Camiones con mantención vencida (según última mantención + intervalo)
+app.get('/api/mantenciones/due', requireAuth, async (_req, res) => {
+  try {
+    if (SKIP_DB) {
+      // tomar última mantención por camión
+      const last = new Map()
+      for (const m of memMantenciones) {
+        const prev = last.get(m.camion_id)
+        if (!prev || new Date(m.fecha_control) > new Date(prev.fecha_control)) last.set(m.camion_id, m)
+      }
+      const today = new Date().toISOString().slice(0,10)
+      const rows = []
+      for (const [camion_id, m] of last.entries()) {
+        const int = Number(m.intervalo_dias || 0)
+        if (!int) continue
+        const due = new Date(m.fecha_control)
+        due.setDate(due.getDate() + int)
+        const overdue = (new Date(today) - due) / (1000*60*60*24)
+        if (overdue >= 0) {
+          const c = memCamiones.find(x => x.id === camion_id)
+          rows.push({ camion_id, patente: c?.patente || '', fecha_control: m.fecha_control, intervalo_dias: int, dias_vencidos: Math.floor(overdue) })
+        }
+      }
+      return res.json({ ok: true, data: rows })
+    }
+    const { rows } = await query(`
+      WITH last_m AS (
+        SELECT DISTINCT ON (camion_id) camion_id, tarea, tipo_control, fecha_control, intervalo_dias
+        FROM mantenciones
+        ORDER BY camion_id, fecha_control DESC
+      )
+      SELECT c.id as camion_id, c.patente, l.fecha_control, l.intervalo_dias,
+        GREATEST(0, (CURRENT_DATE - (l.fecha_control + (l.intervalo_dias || 0) * INTERVAL '1 day'))::int) AS dias_vencidos
+      FROM camiones c
+      JOIN last_m l ON l.camion_id = c.id
+      WHERE l.intervalo_dias IS NOT NULL AND CURRENT_DATE >= (l.fecha_control + l.intervalo_dias * INTERVAL '1 day')
+      ORDER BY dias_vencidos DESC, c.patente ASC
+    `, [])
+    return res.json({ ok: true, data: rows })
+  } catch (e) {
+    console.error('GET /api/mantenciones/due error:', e)
+    res.status(500).json({ ok: false, message: 'Error al calcular vencidos' })
+  }
+})
+
+// ===== Proveedores =====
+app.get('/api/proveedores', requireAuth, async (_req, res) => {
+  try {
+    if (SKIP_DB) return res.json({ ok: true, data: memProveedores.slice().sort((a,b) => a.nombre.localeCompare(b.nombre)) })
+    const { rows } = await query('SELECT * FROM proveedores WHERE active = TRUE ORDER BY nombre ASC', [])
+    return res.json({ ok: true, data: rows })
+  } catch (e) {
+    console.error('GET /api/proveedores error:', e)
+    res.status(500).json({ ok: false, message: 'Error al listar proveedores' })
+  }
+})
+
+app.post('/api/proveedores', requireRoles(['admin','editor']), async (req, res) => {
+  try {
+    const b = req.body || {}
+    const nombre = String(b.nombre || '').trim()
+    if (!nombre) return res.status(400).json({ ok: false, message: 'nombre requerido' })
+    const payload = {
+      nombre,
+      rut: b.rut || null,
+      contacto: b.contacto || null,
+      fono: b.fono || null,
+      email: b.email || null,
+      direccion: b.direccion || null,
+      rubro: b.rubro || null,
+    }
+    if (SKIP_DB) {
+      const row = { id: memId++, ...payload, active: true, created_at: new Date().toISOString() }
+      memProveedores.push(row)
+      return res.status(201).json({ ok: true, data: row })
+    }
+    const { rows } = await query('INSERT INTO proveedores (nombre, rut, contacto, fono, email, direccion, rubro) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *', [payload.nombre, payload.rut, payload.contacto, payload.fono, payload.email, payload.direccion, payload.rubro])
+    return res.status(201).json({ ok: true, data: rows[0] })
+  } catch (e) {
+    console.error('POST /api/proveedores error:', e)
+    res.status(400).json({ ok: false, message: e.message || 'Error al crear proveedor' })
+  }
+})
+
+// ===== Órdenes =====
+app.get('/api/ordenes', requireAuth, async (_req, res) => {
+  try {
+    if (SKIP_DB) {
+      const rows = memOrdenes.map(o => ({ ...o, proveedor_nombre: memProveedores.find(p => p.id === o.proveedor_id)?.nombre || null, patente: o.patente || memCamiones.find(c => c.id === o.camion_id)?.patente || null }))
+      return res.json({ ok: true, data: rows })
+    }
+    const { rows } = await query(`
+      SELECT o.*, p.nombre AS proveedor_nombre, c.patente
+      FROM ordenes o
+      LEFT JOIN proveedores p ON p.id = o.proveedor_id
+      LEFT JOIN camiones c ON c.id = o.camion_id
+      ORDER BY o.created_at DESC
+      LIMIT 200
+    `, [])
+    return res.json({ ok: true, data: rows })
+  } catch (e) {
+    console.error('GET /api/ordenes error:', e)
+    res.status(500).json({ ok: false, message: 'Error al listar órdenes' })
+  }
+})
+
+app.post('/api/ordenes', requireRoles(['admin','editor']), upload.array('adjuntos', 5), async (req, res) => {
+  try {
+    const b = req.body || {}
+    let camionId = b.camion_id ? Number(b.camion_id) : null
+    const patente = String(b.patente || '').trim().toUpperCase().replace(/[^A-Z0-9]/g,'')
+    const fecha = b.fecha
+    const tipo = b.tipo || ''
+    const prioridad = b.prioridad || ''
+    const responsable = b.responsable || ''
+    const descripcion = b.descripcion || ''
+    const estado = b.estado || 'abierta'
+    const proveedorId = b.proveedor_id ? Number(b.proveedor_id) : null
+    const costo_estimado = b.costo_estimado != null ? Number(b.costo_estimado) : null
+    const costo_real = b.costo_real != null ? Number(b.costo_real) : null
+    const files = req.files || []
+
+    if (!camionId && patente) {
+      if (SKIP_DB) {
+        const c = memCamiones.find(x => x.patente === patente)
+        camionId = c?.id || null
+      } else {
+        const { rows } = await query('SELECT id FROM camiones WHERE patente=$1', [patente])
+        camionId = rows[0]?.id || null
+      }
+    }
+
+    if (!fecha) return res.status(400).json({ ok: false, message: 'fecha requerida' })
+
+    if (SKIP_DB) {
+      const row = { id: memId++, camion_id: camionId, proveedor_id: proveedorId || null, patente: patente || null, fecha, tipo, prioridad, responsable, descripcion, estado, costo_estimado, costo_real, adjuntos: files.map(f => ({ filename: f.filename, mimetype: f.mimetype, size: f.size })), created_at: new Date().toISOString() }
+      memOrdenes.unshift(row)
+      return res.status(201).json({ ok: true, data: row })
+    }
+    const { rows } = await query('INSERT INTO ordenes (camion_id, proveedor_id, patente, fecha, tipo, prioridad, responsable, descripcion, estado, costo_estimado, costo_real) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *', [camionId, proveedorId || null, patente || null, fecha, tipo, prioridad, responsable, descripcion, estado, costo_estimado, costo_real])
+    const ord = rows[0]
+    if (files.length) {
+      for (const f of files) {
+        await query('INSERT INTO orden_documentos (orden_id, filename, mimetype, size) VALUES ($1,$2,$3,$4)', [ord.id, f.filename, f.mimetype, f.size])
+      }
+    }
+    return res.status(201).json({ ok: true, data: ord })
+  } catch (e) {
+    console.error('POST /api/ordenes error:', e)
+    res.status(400).json({ ok: false, message: e.message || 'Error al crear orden' })
+  }
+})
 // Editar factura y registrar historial
 app.put("/api/facturas/:id", requireRoles(['admin','editor']), async (req, res) => {
   const id = Number(req.params.id)
@@ -1754,6 +2216,46 @@ app.get('/api/facturas/:id/historial', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('GET /api/facturas/:id/historial error:', err)
     res.status(400).json({ ok: false, message: 'Error al obtener historial' })
+  }
+})
+
+// Eliminar una factura por ID (y sus archivos asociados)
+app.delete('/api/facturas/:id', requireRoles(['admin','editor']), async (req, res) => {
+  const id = Number(req.params.id)
+  try {
+    if (SKIP_DB) {
+      const idx = memFacturas.findIndex(f => f.id === id)
+      if (idx === -1) return res.status(404).json({ ok: false, message: 'Factura no encontrada' })
+      // Borrar archivos físicos asociados
+      try {
+        const files = memFacturas[idx].archivos || []
+        for (const a of files) {
+          const p = path.join(uploadsDir, a.filename)
+          try { fs.unlinkSync(p) } catch {}
+        }
+      } catch {}
+      memFacturas.splice(idx, 1)
+      // Limpiar historial en memoria
+      for (let i = memHistorial.length - 1; i >= 0; i--) {
+        if (memHistorial[i].factura_id === id) memHistorial.splice(i, 1)
+      }
+      return res.json({ ok: true })
+    }
+
+    // Obtener archivos para borrarlos del disco
+    const { rows: files } = await query('SELECT filename FROM factura_archivos WHERE factura_id=$1', [id])
+    // Eliminar factura (cascade borra archivos e historial)
+    const { rowCount } = await query('DELETE FROM facturas WHERE id=$1', [id])
+    if (!rowCount) return res.status(404).json({ ok: false, message: 'Factura no encontrada' })
+    // Borrar archivos físicos
+    for (const row of files) {
+      const p = path.join(uploadsDir, row.filename)
+      try { fs.unlinkSync(p) } catch {}
+    }
+    return res.json({ ok: true })
+  } catch (err) {
+    console.error('DELETE /api/facturas/:id error:', err)
+    res.status(400).json({ ok: false, message: err.message || 'Error al eliminar factura' })
   }
 })
 

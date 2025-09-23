@@ -10,6 +10,9 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "stress:create": "node scripts/stress_facturas.mjs",
     "stress:cleanup": "node scripts/cleanup_stress.mjs"
+    ,
+    "plan:cleanup": "node scripts/cleanup_planificaciones.mjs",
+    "plan:drop": "node scripts/cleanup_planificaciones.mjs --drop"
   },
   "keywords": [],
   "author": "",
@@ -21,7 +24,6 @@
     "express": "^5.1.0",
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.0.2",
-    "pg": "^8.16.3",
-    "xlsx": "^0.18.5"
+    "pg": "^8.16.3"
   }
 }

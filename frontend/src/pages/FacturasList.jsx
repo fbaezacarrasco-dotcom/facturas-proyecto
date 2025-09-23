@@ -173,6 +173,7 @@ function FacturasList({ getAuthHeaders, canEdit }) {
   const [history, setHistory] = useState({ open: false, items: [], title: '' })
   const [preview, setPreview] = useState({ open: false, src: '', kind: '' })
   const [sort, setSort] = useState('') // '', 'guia_asc', 'guia_desc'
+  const [details, setDetails] = useState({ open: false, factura: null })
 
   const queryString = useMemo(() => {
     // # Serializa filtros en querystring
@@ -301,8 +302,8 @@ function FacturasList({ getAuthHeaders, canEdit }) {
 
   return (
     <div>
-      <h2 style={{ marginTop: 0 }}>Facturas</h2>
-      <div className="filters">
+      <h2 style={{ marginTop: 0 }}>Facturas pendientes</h2>
+      <div className="filters sticky-filters">
         <select name="cliente" value={filters.cliente} onChange={onChange}>
           {clientes.map((c) => (
             <option key={c.value} value={c.value}>{c.label}</option>
@@ -344,7 +345,7 @@ function FacturasList({ getAuthHeaders, canEdit }) {
         <table className="table">
           <thead>
             <tr>
-              <th>
+              <th className="col-fecha">
                 <button
                   type="button"
                   className="menu-button"
@@ -355,7 +356,7 @@ function FacturasList({ getAuthHeaders, canEdit }) {
                   Fecha {sort === 'fecha_desc' ? '↓' : sort === 'fecha_asc' ? '↑' : ''}
                 </button>
               </th>
-              <th>
+              <th className="col-numero">
                 <button
                   type="button"
                   className="menu-button"
@@ -366,10 +367,10 @@ function FacturasList({ getAuthHeaders, canEdit }) {
                   N° factura {sort === 'guia_desc' ? '↓' : '↑'}
                 </button>
               </th>
-              <th>Conductor</th>
-              <th>Ruta</th>
-              <th>Estado</th>
-              <th>
+              <th className="col-hide-sm">Conductor</th>
+              <th className="col-hide-sm">Ruta</th>
+              <th className="col-estado">Estado</th>
+              <th className="col-hide-sm">
                 <button
                   type="button"
                   className="menu-button"
@@ -380,7 +381,7 @@ function FacturasList({ getAuthHeaders, canEdit }) {
                   KG {sort === 'kg_desc' ? '↓' : sort === 'kg_asc' ? '↑' : ''}
                 </button>
               </th>
-              <th>
+              <th className="col-hide-sm">
                 <button
                   type="button"
                   className="menu-button"
@@ -391,8 +392,8 @@ function FacturasList({ getAuthHeaders, canEdit }) {
                   Vueltas {sort === 'vueltas_desc' ? '↓' : sort === 'vueltas_asc' ? '↑' : ''}
                 </button>
               </th>
-              <th>Archivos</th>
-              <th>Acciones</th>
+              <th className="col-hide-sm">Archivos</th>
+              <th className="col-acciones">Acciones</th>
             </tr>
           </thead>
           <tbody>
@@ -401,14 +402,14 @@ function FacturasList({ getAuthHeaders, canEdit }) {
               const ruta = f.ruta || f.local || ''
               return (
                 <tr key={f.id}>
-                  <td>{f.fecha}</td>
-                  <td>{numeroFactura}</td>
-                  <td>{f.conductor_xp || ''}</td>
-                  <td>{ruta}</td>
-                  <td><StatusBadge estado={f.estado} /></td>
-                  <td>{f.kg != null ? f.kg : ''}</td>
-                  <td>{f.vueltas != null ? f.vueltas : ''}</td>
-                  <td>
+                  <td className="col-fecha">{f.fecha}</td>
+                  <td className="col-numero">{numeroFactura}</td>
+                  <td className="col-hide-sm">{f.conductor_xp || ''}</td>
+                  <td className="col-hide-sm">{ruta}</td>
+                  <td className="col-estado"><StatusBadge estado={f.estado} /></td>
+                  <td className="col-hide-sm">{f.kg != null ? f.kg : ''}</td>
+                  <td className="col-hide-sm">{f.vueltas != null ? f.vueltas : ''}</td>
+                  <td className="col-hide-sm">
                     {(f.archivos || []).map((a, i) => {
                       const isImg = String(a.mimetype || '').startsWith('image/')
                       const isPdf = String(a.mimetype || '') === 'application/pdf'
@@ -438,15 +439,41 @@ function FacturasList({ getAuthHeaders, canEdit }) {
                       )
                     })}
                   </td>
-                  <td>
+                  <td className="col-acciones">
+                    <button
+                      className="menu-button"
+                      style={{ width: 'auto', marginRight: 6 }}
+                      onClick={() => setDetails({ open: true, factura: f })}
+                    >
+                      Detalles
+                    </button>
                     {canEdit && (
                     <button className="menu-button" style={{ width: 'auto', marginRight: 6 }} onClick={() => setEditing(f)}>
                       Editar
                     </button>
                     )}
-                     <button className="menu-button" style={{ width: 'auto' }} onClick={() => openHistory(f.id)}>
+                     <button className="menu-button" style={{ width: 'auto', marginRight: 6 }} onClick={() => openHistory(f.id)}>
                        Historial
                      </button>
+                    {canEdit && (
+                      <button
+                        className="menu-button"
+                        style={{ width: 'auto', borderColor: '#fca5a5', background: '#fee2e2' }}
+                        onClick={async () => {
+                          if (!confirm('¿Eliminar esta factura?')) return
+                          try {
+                            const res = await fetch(`/api/facturas/${f.id}`, { method: 'DELETE', headers: { ...(getAuthHeaders?.() || {}) } })
+                            const json = await res.json().catch(() => ({}))
+                            if (!res.ok || json?.ok === false) throw new Error(json?.message || 'Error al eliminar')
+                            await load()
+                          } catch (e) {
+                            alert(e.message)
+                          }
+                        }}
+                      >
+                        Eliminar
+                      </button>
+                    )}
                   </td>
                 </tr>
               )
@@ -463,6 +490,48 @@ function FacturasList({ getAuthHeaders, canEdit }) {
             onSaved={() => load()}
             getAuthHeaders={getAuthHeaders}
           />
+        )}
+      </Modal>
+
+      <Modal open={details.open} onClose={() => setDetails({ open: false, factura: null })} title={`Detalles factura #${details.factura?.id || ''}`}>
+        {details.factura && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div><strong>Fecha</strong><br />{details.factura.fecha || ''}</div>
+            <div><strong>N° factura</strong><br />{details.factura.numero_factura || details.factura.guia || ''}</div>
+            <div><strong>Conductor</strong><br />{details.factura.conductor_xp || ''}</div>
+            <div><strong>Ruta</strong><br />{details.factura.ruta || details.factura.local || ''}</div>
+            <div><strong>Estado</strong><br />{details.factura.estado || ''}</div>
+            <div><strong>KG</strong><br />{details.factura.kg != null ? details.factura.kg : ''}</div>
+            <div><strong>Vueltas</strong><br />{details.factura.vueltas != null ? details.factura.vueltas : ''}</div>
+            <div className="full" style={{ gridColumn: '1 / -1' }}>
+              <strong>Observaciones</strong>
+              <div>{details.factura.observaciones || '—'}</div>
+            </div>
+            <div className="full" style={{ gridColumn: '1 / -1' }}>
+              <strong>Archivos</strong>
+              <div>
+                {(details.factura.archivos || []).length === 0 ? '—' : (
+                  (details.factura.archivos || []).map((a, i) => {
+                    const isImg = String(a.mimetype || '').startsWith('image/')
+                    const isPdf = String(a.mimetype || '') === 'application/pdf'
+                    const inlineSrc = `/files/inline/${a.filename}`
+                    return (
+                      <span key={i} style={{ marginRight: 8, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        {isImg ? (
+                          <img src={inlineSrc} alt={a.filename} className="thumb" />
+                        ) : isPdf ? (
+                          <a className="menu-button" style={{ width: 'auto' }} href={inlineSrc} target="_blank" rel="noreferrer">Ver PDF</a>
+                        ) : (
+                          <span style={{ fontSize: 12 }}>Archivo</span>
+                        )}
+                        <a href={`/files/${a.filename}`} download={a.filename}>Descargar</a>
+                      </span>
+                    )
+                  })
+                )}
+              </div>
+            </div>
+          </div>
         )}
       </Modal>
 

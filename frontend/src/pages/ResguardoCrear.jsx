@@ -31,6 +31,7 @@ function ResguardoCrear({ onClose, getAuthHeaders }) {
     cliente: clientes[0]?.value || '1',
     fecha_ingreso: fechaHoy,
     fecha_salida: '',
+    ruta: '',
   })
   const [imagenes, setImagenes] = useState([])
   const [submitting, setSubmitting] = useState(false)
@@ -43,7 +44,7 @@ function ResguardoCrear({ onClose, getAuthHeaders }) {
 
   const onFilesChange = (e) => {
     const files = Array.from(e.target.files || [])
-    if (files.length > 3) { alert('Máximo 3 imágenes'); return }
+    if (files.length > 5) { alert('Máximo 5 imágenes'); return }
     setImagenes(files)
   }
 
@@ -99,6 +100,10 @@ function ResguardoCrear({ onClose, getAuthHeaders }) {
             <input name="nombre" value={form.nombre} onChange={onChange} placeholder="Ej: Yogur descremado 1L" />
           </label>
           <label>
+            <span>Ruta</span>
+            <input name="ruta" value={form.ruta} onChange={onChange} placeholder="Ej: Renca - Ñuñoa" />
+          </label>
+          <label>
             <span>N° factura (guía)</span>
             <input name="guia" value={form.guia} onChange={onChange} />
           </label>
@@ -117,7 +122,7 @@ function ResguardoCrear({ onClose, getAuthHeaders }) {
             <input type="date" name="fecha_salida" value={form.fecha_salida} onChange={onChange} />
           </label>
           <label className="full">
-            <span>Imágenes (hasta 3)</span>
+            <span>Imágenes (hasta 5)</span>
             <input type="file" accept="image/png,image/jpeg" multiple onChange={onFilesChange} />
           </label>
         </div>

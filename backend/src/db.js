@@ -97,6 +97,8 @@ export async function initDb() {
 
   // Asegurar columna nombre en resguardos para despliegues anteriores
   await pool.query(`ALTER TABLE resguardos ADD COLUMN IF NOT EXISTS nombre TEXT;`)
+  // Nueva columna ruta para resguardos
+  await pool.query(`ALTER TABLE resguardos ADD COLUMN IF NOT EXISTS ruta TEXT;`)
 
   // Rendiciones (resumen de gastos/ingresos por día/chofer/camión)
   await pool.query(`
@@ -140,21 +142,117 @@ export async function initDb() {
     );
   `)
 
-  // Planificaciones: almacenamos el Excel procesado como un arreglo JSON de filas
+  // Historial de cambios para ruta_status
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS planificaciones (
+    CREATE TABLE IF NOT EXISTS ruta_status_historial (
       id SERIAL PRIMARY KEY,
-      cliente INTEGER,
-      fecha DATE,
-      descripcion TEXT,
-      rows JSONB NOT NULL,
+      route_code TEXT NOT NULL,
+      status_text TEXT NOT NULL,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
   `)
-  // Asegurar columnas nuevas si la tabla ya existía
-  await pool.query(`ALTER TABLE planificaciones ADD COLUMN IF NOT EXISTS cliente INTEGER;`)
-  await pool.query(`ALTER TABLE planificaciones ADD COLUMN IF NOT EXISTS fecha DATE;`)
-  await pool.query(`ALTER TABLE planificaciones ADD COLUMN IF NOT EXISTS descripcion TEXT;`)
+
+  // Camiones y documentos
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS camiones (
+      id SERIAL PRIMARY KEY,
+      patente VARCHAR(6) UNIQUE NOT NULL,
+      modelo TEXT,
+      ano INTEGER,
+      marca TEXT,
+      kilometraje INTEGER,
+      fecha_entrada DATE NOT NULL,
+      fecha_salida DATE,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `)
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS camion_documentos (
+      id SERIAL PRIMARY KEY,
+      camion_id INTEGER NOT NULL REFERENCES camiones(id) ON DELETE CASCADE,
+      filename TEXT NOT NULL,
+      mimetype TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `)
+
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_camiones_patente ON camiones(patente);`)
+
+  // Registro de bajas de camiones (motivo de eliminación)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS camion_bajas (
+      id SERIAL PRIMARY KEY,
+      camion_id INTEGER,
+      reason TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `)
+
+  // Mantenciones de camiones
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mantenciones (
+      id SERIAL PRIMARY KEY,
+      camion_id INTEGER NOT NULL REFERENCES camiones(id) ON DELETE CASCADE,
+      tarea TEXT NOT NULL,
+      tipo_control TEXT NOT NULL CHECK (tipo_control IN ('preventivo','urgente')),
+      fecha_control DATE NOT NULL,
+      km_antiguo INTEGER,
+      km_nuevo INTEGER,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `)
+  // Nueva columna intervalo_dias (si no existe)
+  await pool.query(`ALTER TABLE mantenciones ADD COLUMN IF NOT EXISTS intervalo_dias INTEGER;`)
+
+  // Proveedores
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS proveedores (
+      id SERIAL PRIMARY KEY,
+      nombre TEXT NOT NULL,
+      rut TEXT,
+      contacto TEXT,
+      fono TEXT,
+      email TEXT,
+      direccion TEXT,
+      rubro TEXT,
+      active BOOLEAN DEFAULT TRUE,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `)
+
+  // Órdenes de trabajo
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ordenes (
+      id SERIAL PRIMARY KEY,
+      camion_id INTEGER REFERENCES camiones(id) ON DELETE SET NULL,
+      proveedor_id INTEGER REFERENCES proveedores(id) ON DELETE SET NULL,
+      patente TEXT,
+      fecha DATE NOT NULL,
+      tipo TEXT,
+      prioridad TEXT,
+      responsable TEXT,
+      descripcion TEXT,
+      estado TEXT,
+      costo_estimado NUMERIC,
+      costo_real NUMERIC,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `)
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS orden_documentos (
+      id SERIAL PRIMARY KEY,
+      orden_id INTEGER NOT NULL REFERENCES ordenes(id) ON DELETE CASCADE,
+      filename TEXT NOT NULL,
+      mimetype TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `)
+
+  // (planificaciones eliminado)
 }
 
 export async function query(text, params) {

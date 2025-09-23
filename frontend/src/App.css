@@ -8,9 +8,10 @@
 /* Layout: sidebar left, content right */
 .app-layout {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: 240px 1fr;
   min-height: 100vh;
 }
+/* En móviles controlamos la grilla con la clase sidebar-closed */
 
 .sidebar {
   box-sizing: border-box;
@@ -48,6 +49,21 @@
 .content {
   box-sizing: border-box;
   padding: 24px;
+}
+
+.backdrop { display: none; }
+
+.hamburger-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(128, 128, 128, 0.25);
+  background: #f5f5f5;
+  color: #222;
+  cursor: pointer;
 }
 
 .content-placeholder {
@@ -111,6 +127,14 @@
   gap: 8px;
   align-items: center;
 }
+.sticky-filters {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: #fff;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
 .filters input,
 .filters select {
   padding: 8px 10px;
@@ -121,11 +145,13 @@
 
 .table-wrapper {
   margin-top: 12px;
-  overflow: auto;
+  overflow-x: hidden; /* sin desplazamiento horizontal */
+  overflow-y: auto;
 }
 .table {
   width: 100%;
   border-collapse: collapse;
+  table-layout: fixed; /* celdas de ancho fijo para elipsis */
 }
 .table th,
 .table td {
@@ -133,10 +159,19 @@
   border-bottom: 1px solid #e6e6e6;
   text-align: left;
   font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis; /* mostrar … cuando no quepa */
 }
 .table thead th {
   background: #f5f5f5;
 }
+
+/* Anchos sugeridos por columna (puedes ajustarlos) */
+.col-fecha { width: 120px; }
+.col-numero { width: 140px; }
+.col-estado { width: 160px; }
+.col-acciones { width: 260px; white-space: normal; overflow: visible; }
 
 .badge {
   display: inline-block;
@@ -240,4 +275,84 @@
 }
 .login-button:hover {
   background: #0b1220;
+}
+
+/* Dashboard grid (stats) */
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  gap: 16px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 900px) {
+  .app-layout {
+    grid-template-columns: 1fr;
+  }
+  .sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: min(85vw, 320px);
+    background: #fff;
+    z-index: 60;
+    padding: 16px;
+    transform: translateX(-100%);
+  transition: transform 0.2s ease;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+  }
+  .sidebar.open { transform: translateX(0); }
+  .sidebar.closed { transform: translateX(-100%); }
+  .backdrop.show {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.35);
+    z-index: 50;
+  }
+  .content { padding: 16px; }
+  .factura-form .grid-2 { grid-template-columns: 1fr; }
+  .table th, .table td { padding: 8px 10px; font-size: 13px; }
+  .thumb { width: 48px; height: 48px; }
+  .dashboard-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 900px) {
+  .app-layout.sidebar-closed { grid-template-columns: 1fr; }
+}
+
+@media (min-width: 901px) {
+  /* En escritorio, la sidebar es fija y el botón hamburguesa no se muestra */
+  .app-layout { grid-template-columns: 240px 1fr; }
+  .app-layout.sidebar-closed { grid-template-columns: 240px 1fr; }
+  .sidebar { position: static; width: auto; transform: none; box-shadow: none; }
+  .backdrop { display: none !important; }
+  .hamburger-btn { display: none; }
+}
+
+@media (max-width: 640px) {
+  .sidebar h1 { font-size: 18px; }
+  .menu-button { padding: 10px 12px; }
+  .filters { gap: 6px; }
+  .filters input, .filters select { flex: 1 1 140px; }
+  .modal-card { width: 96vw; }
+  .thumb { width: 44px; height: 44px; }
+  /* Ocultar columnas menos críticas en móviles */
+  .col-hide-sm { display: none; }
+  .col-acciones { width: 220px; white-space: normal; overflow: visible; }
+  .col-acciones .menu-button { display: inline-block; margin-bottom: 6px; }
+  /* Botones más compactos para caber en la columna */
+  .col-acciones .menu-button { padding: 8px 10px; }
+  .col-fecha { width: 104px; }
+  .col-numero { width: 120px; }
+  .col-estado { width: 120px; }
+}
+.action-buttons {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: nowrap;
+}
+@media (max-width: 640px) {
+  .action-buttons { flex-wrap: wrap; }
 }

@@ -42,7 +42,8 @@ function FacturaCrear({ onClose, getAuthHeaders }) {
     carga: '',
     observaciones: '',
     cliente: clientes[0]?.value || '1',
-    estado: 'entregado sin novedad',
+    // Estado ahora es opcional; se puede editar luego desde "Facturas pendientes"
+    estado: '',
   })
   const [archivos, setArchivos] = useState([])
   const [submitting, setSubmitting] = useState(false)
@@ -95,7 +96,7 @@ function FacturaCrear({ onClose, getAuthHeaders }) {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <h2 style={{ margin: 0 }}>Crear factura</h2>
+        <h2 style={{ margin: 0 }}>Ingresar facturas pendientes</h2>
         <button className="menu-button" style={{ width: 'auto' }} onClick={onClose}>Volver</button>
       </div>
 
@@ -115,7 +116,7 @@ function FacturaCrear({ onClose, getAuthHeaders }) {
       <form onSubmit={onSubmit} className="factura-form">
         <div className="grid-2">
           <label>
-            <span>Día</span>
+            <span>Día de ingreso</span>
             <select name="dia" value={form.dia} onChange={onChange} required>
               <option value="">Seleccionar</option>
               <option value="Domingo">Domingo</option>
@@ -128,15 +129,15 @@ function FacturaCrear({ onClose, getAuthHeaders }) {
             </select>
           </label>
           <label>
-            <span>Fecha</span>
+            <span>Fecha de perdida</span>
             <input type="date" name="fecha" value={form.fecha} onChange={onChange} required />
           </label>
           <label>
-            <span>Conductor-XP</span>
+            <span>Conductor</span>
             <input name="conductorXp" value={form.conductorXp} onChange={onChange} />
           </label>
           <label>
-            <span>Camión</span>
+            <span>Ruta</span>
             <input name="camion" value={form.camion} onChange={onChange} />
           </label>
           <label>
@@ -148,15 +149,15 @@ function FacturaCrear({ onClose, getAuthHeaders }) {
             <input name="guia" value={form.guia} onChange={onChange} placeholder="Ej: 001234" />
           </label>
           <label>
-            <span>Local</span>
+            <span>Local de entrega</span>
             <input name="local" value={form.local} onChange={onChange} />
           </label>
           <label>
-            <span>KG</span>
+            <span>Cantidad</span>
             <input type="number" step="0.01" name="kg" value={form.kg} onChange={onChange} min="0" />
           </label>
           <label>
-            <span>Carga</span>
+            <span>Tipo de Carga</span>
             <select name="carga" value={form.carga} onChange={onChange}>
               <option value="">Seleccionar</option>
               <option value="seco">Seco</option>
@@ -167,8 +168,9 @@ function FacturaCrear({ onClose, getAuthHeaders }) {
           </label>
           
           <label>
-            <span>Estado</span>
+            <span>Estado (opcional)</span>
             <select name="estado" value={form.estado} onChange={onChange}>
+              <option value="">— (sin estado)</option>
               <option value="entregado sin novedad">entregado sin novedad</option>
               <option value="entregado con detalle">entregado con detalle</option>
               <option value="rechazado">rechazado</option>
@@ -176,7 +178,7 @@ function FacturaCrear({ onClose, getAuthHeaders }) {
             </select>
           </label>
           <label className="full">
-            <span>Observaciones</span>
+            <span>Comentarios u Observaciones</span>
             <textarea name="observaciones" value={form.observaciones} onChange={onChange} rows={3} />
           </label>
           <label>
@@ -195,7 +197,7 @@ function FacturaCrear({ onClose, getAuthHeaders }) {
         </div>
         <div style={{ marginTop: 12 }}>
           <button type="submit" className="menu-button" disabled={submitting} style={{ width: 'auto' }}>
-            {submitting ? 'Enviando...' : 'Guardar factura'}
+            {submitting ? 'Enviando...' : 'Guardar pendiente'}
           </button>
         </div>
       </form>
