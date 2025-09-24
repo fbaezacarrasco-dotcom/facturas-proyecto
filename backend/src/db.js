@@ -34,6 +34,7 @@ export async function initDb() {
       dia TEXT,
       fecha DATE NOT NULL,
       conductor_xp TEXT,
+      peoneta TEXT,
       camion TEXT,
       vueltas INTEGER,
       guia TEXT,
@@ -58,6 +59,8 @@ export async function initDb() {
 
   // Nueva columna 'estado' para facturas (si no existe)
   await pool.query(`ALTER TABLE facturas ADD COLUMN IF NOT EXISTS estado TEXT;`)
+  // Nueva columna 'peoneta' para facturas (si no existe)
+  await pool.query(`ALTER TABLE facturas ADD COLUMN IF NOT EXISTS peoneta TEXT;`)
 
   // Historial de cambios por factura
   await pool.query(`
@@ -130,7 +133,6 @@ export async function initDb() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_rendiciones_fecha ON rendiciones(fecha);`)
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_rendiciones_chofer ON rendiciones(chofer);`)
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_resguardos_fecha_ingreso ON resguardos(fecha_ingreso);`)
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_ruta_status_created_at ON ruta_status(created_at);`)
 
   // Status de rutas (efímero: se limpia por antigüedad desde el servidor)
   await pool.query(`
@@ -141,6 +143,8 @@ export async function initDb() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
   `)
+  // Índice después de asegurar existencia de la tabla
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_ruta_status_created_at ON ruta_status(created_at);`)
 
   // Historial de cambios para ruta_status
   await pool.query(`
@@ -240,6 +244,35 @@ export async function initDb() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
   `)
+
+  // Planificaciones (cabecera + filas JSONB)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS planificaciones (
+      id SERIAL PRIMARY KEY,
+      cliente INTEGER REFERENCES clients(id) ON DELETE SET NULL,
+      fecha DATE,
+      descripcion TEXT,
+      rows JSONB NOT NULL DEFAULT '[]'::jsonb,
+      version INTEGER NOT NULL DEFAULT 1,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `)
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_planificaciones_fecha ON planificaciones(fecha);`)
+
+  // Conductores / Peonetas
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS drivers (
+      id SERIAL PRIMARY KEY,
+      nombre TEXT NOT NULL,
+      apellido TEXT NOT NULL,
+      rut TEXT UNIQUE,
+      rol TEXT NOT NULL CHECK (rol IN ('conductor','peoneta')),
+      active BOOLEAN DEFAULT TRUE,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `)
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_drivers_active ON drivers(active);`)
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS orden_documentos (

@@ -8,12 +8,9 @@ import RendicionCrear from './pages/RendicionCrear.jsx'
 import RendicionesList from './pages/RendicionesList.jsx'
 import InventarioList from './pages/InventarioList.jsx'
 import Admin from './pages/Admin.jsx'
-import Mantenimiento from './pages/Mantenimiento.jsx'
-import MntCamiones from './pages/mantenimiento/MntCamiones.jsx'
-import MntMantencion from './pages/mantenimiento/MntMantencion.jsx'
-import MntOrdenes from './pages/mantenimiento/MntOrdenes.jsx'
-import MntProveedores from './pages/mantenimiento/MntProveedores.jsx'
-import MntReportes from './pages/mantenimiento/MntReportes.jsx'
+import PlanificacionCrear from './pages/PlanificacionCrear.jsx'
+import PlanificacionesList from './pages/PlanificacionesList.jsx'
+import PlanEditor from './pages/PlanEditor.jsx'
 import RutasStatus from './pages/RutasStatus.jsx'
 // (planificación eliminada)
 // # Componente raíz del frontend
@@ -25,7 +22,7 @@ function App() {
   const [user, setUser] = useState(null) // nombre de usuario (email)
   const [role, setRole] = useState(null) // 'admin' | 'viewer'
   const [token, setToken] = useState(null)
-  const [view, setView] = useState('menu') // 'menu' | 'crear' | 'ver' | 'resguardo' | 'inventario' | 'rendicion_crear' | 'rendiciones' | 'planificacion_crear' | 'planificaciones' | 'rutas' | 'admin' | 'mantenimiento' | 'mnt_camiones' | 'mnt_mantencion' | 'mnt_ordenes' | 'mnt_proveedores' | 'mnt_reportes'
+  const [view, setView] = useState('menu') // 'menu' | 'crear' | 'ver' | 'resguardo' | 'inventario' | 'rendicion_crear' | 'rendiciones' | 'planificacion_crear' | 'planificaciones' | 'plan_editor' | 'rutas' | 'admin'
   const [sidebarOpen, setSidebarOpen] = useState(() => {
     try { return typeof window !== 'undefined' ? window.innerWidth > 900 : false } catch { return false }
   })
@@ -52,6 +49,12 @@ function App() {
         }
       }
     } catch {}
+    // Vista desde querystring (permitir abrir editores en nueva pestaña)
+    try {
+      const sp = new URLSearchParams(window.location.search)
+      const v = sp.get('view')
+      if (v) setView(v)
+    } catch {}
   }, [])
 
   // Mantener abierto al pasar a pantallas grandes
@@ -72,7 +75,7 @@ function App() {
   const handleRendiciones = () => { setView('rendiciones'); setSidebarOpen(false) }
   const handleAdmin = () => { setView('admin'); setSidebarOpen(false) }
   const handleRutas = () => { setView('rutas'); setSidebarOpen(false) }
-  const handleMantenimiento = () => { setView('mantenimiento'); setSidebarOpen(false) }
+  // Eliminado: área de mantenimiento
   // (planificación eliminada)
   const handleCerrarSesion = () => {
     console.log('Cerrar sesión')
@@ -87,7 +90,11 @@ function App() {
 
   const getAuthHeaders = () => (token ? { Authorization: `Bearer ${token}` } : {})
   const [showCommercial, setShowCommercial] = useState(false)
-  const [showMant, setShowMant] = useState(false)
+  const [showPlanning, setShowPlanning] = useState(false)
+  const [showFacturas, setShowFacturas] = useState(false)
+  const [showInventario, setShowInventario] = useState(false)
+  const [showRend, setShowRend] = useState(false)
+  // Eliminado: toggles de mantenimiento
 
   if (!isAuthenticated) {
     return (
@@ -109,29 +116,65 @@ function App() {
   return (
     <div className={`app-layout ${sidebarOpen ? 'sidebar-open' : 'sidebar-closed'}`}>
       <aside className={`sidebar ${sidebarOpen ? 'open' : 'closed'}`}>
-        <h1>Menú</h1>
+        <div className="sidebar-title">
+          <h1>Menú</h1>
+          <button className="menu-button" style={{ width: 'auto' }} onClick={() => setView('menu')}>
+            📊 Ver gráficos
+          </button>
+        </div>
         <button className="menu-button" onClick={() => setShowCommercial(s => !s)}>
           🧭 Área comercial {showCommercial ? '▲' : '▼'}
         </button>
         {showCommercial && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 8 }}>
-            {/* Facturas */}
-            {role !== 'viewer' && (
-              <button className="menu-button" onClick={handleCrear}>🧾 Ingresar facturas pendientes</button>
+            {/* Planificaciones */}
+            <button className="menu-button" onClick={() => setShowPlanning(s => !s)}>
+              🗓️ Planificaciones {showPlanning ? '▲' : '▼'}
+            </button>
+            {showPlanning && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 8 }}>
+                <button className="menu-button" onClick={() => { setView('planificacion_crear'); setSidebarOpen(false) }}>➕ Crear planificación</button>
+                <button className="menu-button" onClick={() => { setView('planificaciones'); setSidebarOpen(false) }}>📄 Ver planificaciones</button>
+              </div>
             )}
-            <button className="menu-button" onClick={handleVer}>📄 Facturas pendientes</button>
+            {/* Facturas pendientes (grupo) */}
+            <button className="menu-button" onClick={() => setShowFacturas(s => !s)}>
+              🧾 Facturas pendientes {showFacturas ? '▲' : '▼'}
+            </button>
+            {showFacturas && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 8 }}>
+                {role !== 'viewer' && (
+                  <button className="menu-button" onClick={handleCrear}>➕ Ingresar facturas pendientes</button>
+                )}
+                <button className="menu-button" onClick={handleVer}>📄 Ver facturas pendientes</button>
+              </div>
+            )}
 
-            {/* Resguardos / Inventario */}
-            {role !== 'viewer' && (
-              <button className="menu-button" onClick={handleResguardo}>📦 Agregar resguardo</button>
+            {/* Inventario (grupo) */}
+            <button className="menu-button" onClick={() => setShowInventario(s => !s)}>
+              📦 Inventario {showInventario ? '▲' : '▼'}
+            </button>
+            {showInventario && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 8 }}>
+                {role !== 'viewer' && (
+                  <button className="menu-button" onClick={handleResguardo}>➕ Agregar resguardo</button>
+                )}
+                <button className="menu-button" onClick={handleInventario}>📋 Ver inventario</button>
+              </div>
             )}
-            <button className="menu-button" onClick={handleInventario}>📋 Inventario</button>
 
-            {/* Rendiciones */}
-            {role !== 'viewer' && (
-              <button className="menu-button" onClick={handleRendicionCrear}>🧮 Rendición</button>
+            {/* Rendiciones (grupo) */}
+            <button className="menu-button" onClick={() => setShowRend(s => !s)}>
+              🧮 Rendiciones {showRend ? '▲' : '▼'}
+            </button>
+            {showRend && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 8 }}>
+                {role !== 'viewer' && (
+                  <button className="menu-button" onClick={handleRendicionCrear}>➕ Crear rendición</button>
+                )}
+                <button className="menu-button" onClick={handleRendiciones}>📑 Ver rendiciones</button>
+              </div>
             )}
-            <button className="menu-button" onClick={handleRendiciones}>📑 Ver rendiciones</button>
 
             {/* (Planificación eliminada) */}
 
@@ -140,19 +183,7 @@ function App() {
             {role === 'admin' && (<button className="menu-button" onClick={handleAdmin}>🛠️ Admin</button>)}
           </div>
         )}
-        {/* Sección Mantenimiento (fuera de Área comercial) */}
-        <button className="menu-button" onClick={() => setShowMant(s => !s)}>
-          🧰 Mantenimiento {showMant ? '▲' : '▼'}
-        </button>
-        {showMant && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 8 }}>
-            <button className="menu-button" onClick={() => { setView('mnt_camiones'); setSidebarOpen(false) }}>🚚 Camiones</button>
-            <button className="menu-button" onClick={() => { setView('mnt_mantencion'); setSidebarOpen(false) }}>🛠️ Mantención</button>
-            <button className="menu-button" onClick={() => { setView('mnt_ordenes'); setSidebarOpen(false) }}>📋 Órdenes</button>
-            <button className="menu-button" onClick={() => { setView('mnt_proveedores'); setSidebarOpen(false) }}>🏭 Proveedores</button>
-            <button className="menu-button" onClick={() => { setView('mnt_reportes'); setSidebarOpen(false) }}>📈 Reportes</button>
-          </div>
-        )}
+        {/* Área de mantenimiento eliminada */}
         {/* Cerrar sesión fuera de los grupos */}
         <button className="menu-button" onClick={handleCerrarSesion}>🚪 Cerrar sesión</button>
       </aside>
@@ -191,18 +222,12 @@ function App() {
           <RutasStatus getAuthHeaders={getAuthHeaders} canEdit={role !== 'viewer'} />
         ) : view === 'admin' ? (
           <Admin getAuthHeaders={getAuthHeaders} />
-        ) : view === 'mantenimiento' ? (
-          <Mantenimiento getAuthHeaders={getAuthHeaders} onGoHome={() => setView('menu')} />
-        ) : view === 'mnt_camiones' ? (
-          <MntCamiones getAuthHeaders={getAuthHeaders} onGoHome={() => setView('menu')} />
-        ) : view === 'mnt_mantencion' ? (
-          <MntMantencion getAuthHeaders={getAuthHeaders} onGoHome={() => setView('menu')} />
-        ) : view === 'mnt_ordenes' ? (
-          <MntOrdenes getAuthHeaders={getAuthHeaders} onGoHome={() => setView('menu')} />
-        ) : view === 'mnt_proveedores' ? (
-          <MntProveedores getAuthHeaders={getAuthHeaders} onGoHome={() => setView('menu')} />
-        ) : view === 'mnt_reportes' ? (
-          <MntReportes getAuthHeaders={getAuthHeaders} />
+        ) : view === 'planificacion_crear' ? (
+          <PlanificacionCrear getAuthHeaders={getAuthHeaders} onClose={() => setView('menu')} />
+        ) : view === 'planificaciones' ? (
+          <PlanificacionesList getAuthHeaders={getAuthHeaders} />
+        ) : view === 'plan_editor' ? (
+          <PlanEditor />
         ) : (
           <>
             <h2 style={{ marginTop: 0, marginBottom: 12 }}>Bienvenido, {user || 'usuario'}</h2>
@@ -315,12 +340,8 @@ function Dashboard({ getAuthHeaders }) {
           </div>
         </div>
         <div>
-          <div style={{ fontSize: 16, marginBottom: 6 }}>Facturas — condición seleccionada</div>
+          <div style={{ fontSize: 16, marginBottom: 6 }}>Facturas pendientes</div>
           <div style={{ color: '#666' }}>
-            Simple: puedes filtrar por cliente, día y condición (estado).<br/>
-            Técnico: el backend filtra por cliente/fecha; si envías estado exacto,
-            cuenta solo ese estado; si eliges “Entregadas (todas)”, suma estados con
-            prefijo “entregado%”.
           </div>
         </div>
       </div>

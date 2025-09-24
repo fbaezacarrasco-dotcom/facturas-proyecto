@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-function MntCamiones({ getAuthHeaders, onGoHome }) {
+function MntCamiones({ getAuthHeaders }) {
   const [form, setForm] = useState({
     patente: '', modelo: '', ano: '', marca: '', kilometraje: '', fecha_entrada: '', fecha_salida: ''
   })
@@ -27,10 +27,10 @@ function MntCamiones({ getAuthHeaders, onGoHome }) {
   const onChange = (e) => {
     const { name, value } = e.target
     // Sanitizar según reglas
-    if (name === 'patente') return setForm(f => ({ ...f, patente: value.toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,6) }))
+    if (name === 'patente') return setForm(f => ({ ...f, patente: value.toUpperCase().slice(0,6) }))
     if (name === 'modelo') return setForm(f => ({ ...f, modelo: value.replace(/[^a-zA-ZÁÉÍÓÚÑáéíóúñ\s-]/g,'') }))
     if (name === 'ano') return setForm(f => ({ ...f, ano: value.replace(/\D/g,'').slice(0,4) }))
-    if (name === 'marca') return setForm(f => ({ ...f, marca: value.replace(/[^a-zA-ZÁÉÍÓÚÑáéíóúñ\s-]/g,'') }))
+    if (name === 'marca') return setForm(f => ({ ...f, marca: value.replace(/\D/g,'') }))
     if (name === 'kilometraje') return setForm(f => ({ ...f, kilometraje: value.replace(/\D/g,'') }))
     setForm(f => ({ ...f, [name]: value }))
   }
@@ -61,18 +61,13 @@ function MntCamiones({ getAuthHeaders, onGoHome }) {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: 8 }}>
-        <button className="menu-button" style={{ width: 'auto' }} onClick={() => onGoHome?.()}>
-          📊 Ver gráficos (inicio)
-        </button>
-      </div>
       <h2 style={{ marginTop: 0 }}>Mantenimiento — Camiones</h2>
       <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-        <button className="menu-button" style={{ width: 'auto', background: mode==='agregar' ? '#eef2ff' : undefined }} onClick={() => setMode('agregar')}>
-          ➕ Agregar camión
-        </button>
         <button className="menu-button" style={{ width: 'auto', background: mode==='listar' ? '#eef2ff' : undefined }} onClick={() => { setMode('listar'); load() }}>
           📋 Listar camiones
+        </button>
+        <button className="menu-button" style={{ width: 'auto', background: mode==='agregar' ? '#eef2ff' : undefined }} onClick={() => setMode('agregar')}>
+          ➕ Agregar camión
         </button>
       </div>
       {result && (
@@ -90,23 +85,23 @@ function MntCamiones({ getAuthHeaders, onGoHome }) {
         <div className="grid-2">
           <label>
             <span>Patente</span>
-            <input name="patente" value={form.patente} onChange={onChange} maxLength={6} required pattern="[A-Z0-9]{6}" />
+            <input name="patente" value={form.patente} onChange={onChange} maxLength={6} required />
           </label>
           <label>
             <span>Modelo</span>
-            <input name="modelo" value={form.modelo} onChange={onChange} pattern="[A-Za-zÁÉÍÓÚÑáéíóúñ\-\s]+" />
+            <input name="modelo" value={form.modelo} onChange={onChange} />
           </label>
           <label>
-            <span>Año</span>
-            <input name="ano" value={form.ano} onChange={onChange} inputMode="numeric" maxLength={4} pattern="\d{1,4}" />
+            <span>Año </span>
+            <input name="ano" value={form.ano} onChange={onChange} inputMode="numeric" maxLength={4} />
           </label>
           <label>
-            <span>Marca</span>
-            <input name="marca" value={form.marca} onChange={onChange} pattern="[A-Za-zÁÉÍÓÚÑáéíóúñ\-\s]+" />
+            <span>Marca </span>
+            <input name="marca" value={form.marca} onChange={onChange} />
           </label>
           <label>
             <span>Kilometraje</span>
-            <input name="kilometraje" value={form.kilometraje} onChange={onChange} inputMode="numeric" pattern="\d+" />
+            <input name="kilometraje" value={form.kilometraje} onChange={onChange} inputMode="numeric" />
           </label>
           <label>
             <span>Fecha entrada</span>
@@ -117,7 +112,7 @@ function MntCamiones({ getAuthHeaders, onGoHome }) {
             <input type="date" name="fecha_salida" value={form.fecha_salida} onChange={onChange} />
           </label>
           <label className="full">
-            <span>Documentos</span>
+            <span>Documentos (máx. 5) — pdf/jpg/png</span>
             <input type="file" accept=".pdf,.png,.jpg,.jpeg" multiple onChange={onFiles} />
             <div style={{ fontSize: 12, color: '#666' }}>{docs.length} seleccionado(s)</div>
           </label>
@@ -159,12 +154,11 @@ function MntCamiones({ getAuthHeaders, onGoHome }) {
                   <td className="col-hide-sm">{c.fecha_salida || ''}</td>
                   <td className="col-hide-sm">{(c.documentos || []).length}</td>
                   <td className="col-acciones">
-                    <div className="action-buttons">
-                      <button className="menu-button" style={{ width: 'auto' }} onClick={() => setEditing(c)}>Editar</button>
-                      <button
-                        className="menu-button"
-                        style={{ width: 'auto', borderColor: '#fca5a5', background: '#fee2e2' }}
-                        onClick={async () => {
+                    <button className="menu-button" style={{ width: 'auto', marginRight: 6 }} onClick={() => setEditing(c)}>Editar</button>
+                    <button
+                      className="menu-button"
+                      style={{ width: 'auto', borderColor: '#fca5a5', background: '#fee2e2' }}
+                      onClick={async () => {
                         if (!confirm('¿Eliminar este camión? Esta acción no se puede deshacer.')) return
                         const reason = prompt('Motivo para eliminar el camión:')
                         if (!reason) return
@@ -175,9 +169,8 @@ function MntCamiones({ getAuthHeaders, onGoHome }) {
                           if (!res.ok || json?.ok === false) throw new Error(json?.message || 'Error al eliminar')
                           load()
                         } catch (e) { alert(e.message) }
-                        }}
-                      >Eliminar</button>
-                    </div>
+                      }}
+                    >Eliminar</button>
                   </td>
                 </tr>
               ))}
@@ -227,10 +220,10 @@ function EditCamionForm({ item, onClose, onSaved, getAuthHeaders }) {
 
   const onChange = (e) => {
     const { name, value } = e.target
-    if (name === 'patente') return setForm(f => ({ ...f, patente: value.toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,6) }))
+    if (name === 'patente') return setForm(f => ({ ...f, patente: value.toUpperCase().slice(0,6) }))
     if (name === 'modelo') return setForm(f => ({ ...f, modelo: value.replace(/[^a-zA-ZÁÉÍÓÚÑáéíóúñ\s-]/g,'') }))
     if (name === 'ano') return setForm(f => ({ ...f, ano: value.replace(/\D/g,'').slice(0,4) }))
-    if (name === 'marca') return setForm(f => ({ ...f, marca: value.replace(/[^a-zA-ZÁÉÍÓÚÑáéíóúñ\s-]/g,'') }))
+    if (name === 'marca') return setForm(f => ({ ...f, marca: value.replace(/\D/g,'') }))
     if (name === 'kilometraje') return setForm(f => ({ ...f, kilometraje: value.replace(/\D/g,'') }))
     setForm(f => ({ ...f, [name]: value }))
   }
@@ -256,23 +249,23 @@ function EditCamionForm({ item, onClose, onSaved, getAuthHeaders }) {
       <div className="grid-2">
         <label>
           <span>Patente</span>
-          <input name="patente" value={form.patente} onChange={onChange} maxLength={6} required pattern="[A-Z0-9]{6}" />
+          <input name="patente" value={form.patente} onChange={onChange} maxLength={6} required />
         </label>
         <label>
-          <span>Modelo</span>
-          <input name="modelo" value={form.modelo} onChange={onChange} pattern="[A-Za-zÁÉÍÓÚÑáéíóúñ\-\s]+" />
+          <span>Modelo </span>
+          <input name="modelo" value={form.modelo} onChange={onChange} />
         </label>
         <label>
-          <span>Año</span>
-          <input name="ano" value={form.ano} onChange={onChange} inputMode="numeric" maxLength={4} pattern="\d{1,4}" />
+          <span>Año </span>
+          <input name="ano" value={form.ano} onChange={onChange} inputMode="numeric" maxLength={4} />
         </label>
         <label>
           <span>Marca</span>
-          <input name="marca" value={form.marca} onChange={onChange} pattern="[A-Za-zÁÉÍÓÚÑáéíóúñ\-\s]+" />
+          <input name="marca" value={form.marca} onChange={onChange} />
         </label>
         <label>
           <span>Kilometraje</span>
-          <input name="kilometraje" value={form.kilometraje} onChange={onChange} inputMode="numeric" pattern="\d+" />
+          <input name="kilometraje" value={form.kilometraje} onChange={onChange} inputMode="numeric" />
         </label>
         <label>
           <span>Fecha entrada</span>

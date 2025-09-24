@@ -27,6 +27,14 @@
   font-size: 20px;
 }
 
+.sidebar-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
 .menu-button {
   width: 100%;
   padding: 12px 16px;
@@ -38,6 +46,7 @@
   cursor: pointer;
   transition: background 0.2s ease, border-color 0.2s ease;
 }
+.btn-sm { padding: 6px 10px !important; font-size: 12px; border-radius: 6px; }
 .menu-button:hover {
   background: #eaeaea;
   border-color: rgba(128, 128, 128, 0.5);
@@ -49,6 +58,7 @@
 .content {
   box-sizing: border-box;
   padding: 24px;
+  max-width: 100%;
 }
 
 .backdrop { display: none; }
@@ -64,6 +74,12 @@
   background: #f5f5f5;
   color: #222;
   cursor: pointer;
+}
+
+/* Mostrar solo en móvil (<=640px) */
+.only-sm { display: none; }
+@media (max-width: 640px) {
+  .only-sm { display: inline-block; }
 }
 
 .content-placeholder {
@@ -99,6 +115,11 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
+@media (max-width: 900px) {
+  .factura-form .grid-2 {
+    grid-template-columns: 1fr; /* apilar en pantallas pequeñas */
+  }
+}
 
 .factura-form label {
   display: flex;
@@ -119,6 +140,7 @@
   border: 1px solid #d0d0d0;
   background: #fff;
   color: #111;
+  font-weight: 400;
 }
 
 .filters {
@@ -141,11 +163,16 @@
   border-radius: 8px;
   border: 1px solid #d0d0d0;
   background: #fff;
+  font-size: 13px;
+  font-weight: 400;
 }
+
+/* General dropdown font tuning */
+select { font-size: 13px; font-weight: 400; }
 
 .table-wrapper {
   margin-top: 12px;
-  overflow-x: hidden; /* sin desplazamiento horizontal */
+  overflow-x: auto; /* permitir desplazamiento horizontal */
   overflow-y: auto;
 }
 .table {
@@ -277,6 +304,25 @@
   background: #0b1220;
 }
 
+/* Crear planificación: versión compacta para que quepan más campos en pantalla */
+.plan-compact { margin-top: 6px; }
+.plan-compact .grid-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+}
+.plan-compact label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.plan-compact input,
+.plan-compact select,
+.plan-compact textarea {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #d0d0d0;
+  background: #fff;
+  color: #111;
+  font-size: 13px;
+}
+
 /* Dashboard grid (stats) */
 .dashboard-grid {
   display: grid;
@@ -356,3 +402,17 @@
 @media (max-width: 640px) {
   .action-buttons { flex-wrap: wrap; }
 }
+/* Global sizing to avoid horizontal scroll and fit viewport */
+* { box-sizing: border-box; }
+html, body, #root { width: 100%; max-width: 100%; overflow-x: hidden; }
+
+/* (revert) usar tamaños de encabezado por defecto del navegador */
+
+/* Media tweaks for very small devices */
+@media (max-width: 360px) {
+  .menu-button { padding: 8px 10px; }
+  .btn-sm { padding: 5px 8px !important; font-size: 11px; }
+}
+
+/* Ensure images/iframes never overflow the container */
+img, iframe { max-width: 100%; height: auto; }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 const useClientes = (getAuthHeaders) => {
   const [list, setList] = useState([{ value: '', label: 'Todos' }])
@@ -127,6 +127,9 @@ function InventarioList({ getAuthHeaders, canEdit }) {
   const [error, setError] = useState('')
   const [preview, setPreview] = useState({ open: false, src: '' })
   const [editing, setEditing] = useState(null)
+  const wrapRef = useRef(null)
+  const [scrollX, setScrollX] = useState(0)
+  const [maxScrollX, setMaxScrollX] = useState(0)
   const [details, setDetails] = useState({ open: false, item: null })
 
   const queryString = useMemo(() => {
@@ -170,6 +173,11 @@ function InventarioList({ getAuthHeaders, canEdit }) {
   }
 
   useEffect(() => { load() }, [])
+  const measureScroll = () => { const el = wrapRef.current; if (!el) return; const max = Math.max(0, el.scrollWidth - el.clientWidth); setMaxScrollX(max); setScrollX(el.scrollLeft) }
+  useEffect(() => { measureScroll() }, [data])
+  useEffect(() => { const onResize = () => measureScroll(); window.addEventListener('resize', onResize); return () => window.removeEventListener('resize', onResize) }, [])
+  const onScrollWrap = () => { const el = wrapRef.current; if (el) setScrollX(el.scrollLeft) }
+  const onSlide = (v) => { const el = wrapRef.current; if (!el) return; el.scrollLeft = Number(v); setScrollX(Number(v)) }
 
   const onChange = (e) => {
     const { name, value } = e.target
@@ -196,7 +204,13 @@ function InventarioList({ getAuthHeaders, canEdit }) {
 
       {error && <div style={{ color: '#9b1c1c', marginTop: 8 }}>{error}</div>}
 
-      <div className="table-wrapper">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '4px 0 8px' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ color: '#555', fontSize: 12 }}>Desplazamiento</span>
+          <input type="range" min={0} max={Math.max(0, maxScrollX)} value={Math.min(scrollX, maxScrollX)} onChange={e => onSlide(e.target.value)} style={{ width: 260 }} />
+        </label>
+      </div>
+      <div ref={wrapRef} className="table-wrapper" onScroll={onScrollWrap}>
         <table className="table">
           <thead>
             <tr>
@@ -237,7 +251,7 @@ function InventarioList({ getAuthHeaders, canEdit }) {
                 </td>
                 <td>
                   <button
-                    className="menu-button"
+                    className="menu-button only-sm"
                     style={{ width: 'auto', marginRight: 6 }}
                     onClick={() => setDetails({ open: true, item: r })}
                   >

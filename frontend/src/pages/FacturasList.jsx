@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 // # Listado con filtros, edición (PUT), historial y previsualización inline/descarga de archivos
 
 const useClientes = (getAuthHeaders) => {
@@ -9,6 +9,22 @@ const useClientes = (getAuthHeaders) => {
         const res = await fetch('/api/clients', { headers: { ...(getAuthHeaders?.() || {}) } })
         const json = await res.json()
         if (res.ok && json?.ok) setList([{ value: '', label: 'Todos' }, ...(json.data || []).map(c => ({ value: String(c.id), label: c.name }))])
+      } catch {}
+    }
+    load()
+  }, [])
+  return list
+}
+
+// Conductores/Peonetas para selects en formularios
+const useDrivers = (getAuthHeaders) => {
+  const [list, setList] = useState([])
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const res = await fetch('/api/drivers', { headers: { ...(getAuthHeaders?.() || {}) } })
+        const json = await res.json()
+        if (res.ok && json?.ok) setList((json.data || []).map(d => ({ value: String(d.id), label: `${d.nombre} ${d.apellido}`, rol: d.rol })))
       } catch {}
     }
     load()
@@ -27,7 +43,7 @@ function StatusBadge({ estado }) {
   return <span className={cls}>{estado || '—'}</span>
 }
 
-function Modal({ open, onClose, children, title }) {
+function Modal({ open, onClose, children, title, actions }) {
   // # Modal genérico para reutilizar en edición, historial y preview
   if (!open) return null
   return (
@@ -35,7 +51,10 @@ function Modal({ open, onClose, children, title }) {
       <div className="modal-card">
         <div className="modal-header">
           <h3>{title}</h3>
-          <button className="menu-button" style={{ width: 'auto' }} onClick={onClose}>Cerrar</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {actions}
+            <button className="menu-button" style={{ width: 'auto' }} onClick={onClose}>Cerrar</button>
+          </div>
         </div>
         <div className="modal-body">{children}</div>
       </div>
@@ -61,6 +80,21 @@ function EditForm({ factura, onClose, onSaved, getAuthHeaders }) {
   }))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const drivers = useDrivers(getAuthHeaders)
+  const initialDriverId = useMemo(() => {
+    const full = String(factura.conductor_xp || '').trim()
+    const found = (drivers || []).find(d => d.label === full)
+    return found?.value || ''
+  }, [drivers, factura.conductor_xp])
+  const [driverId, setDriverId] = useState('')
+  useEffect(() => { setDriverId(initialDriverId) }, [initialDriverId])
+  const initialPeonetaId = useMemo(() => {
+    const full = String(factura.peoneta || '').trim()
+    const found = (drivers || []).find(d => d.label === full)
+    return found?.value || ''
+  }, [drivers, factura.peoneta])
+  const [peonetaId, setPeonetaId] = useState('')
+  useEffect(() => { setPeonetaId(initialPeonetaId) }, [initialPeonetaId])
 
   const onChange = (e) => {
     const { name, value } = e.target
@@ -111,8 +145,36 @@ function EditForm({ factura, onClose, onSaved, getAuthHeaders }) {
           <input type="date" name="fecha" value={form.fecha} onChange={onChange} />
         </label>
         <label>
-          <span>Conductor-XP</span>
-          <input name="conductorXp" value={form.conductorXp} onChange={onChange} />
+          <span>Conductor</span>
+          <select
+            name="driver"
+            value={driverId}
+            onChange={(e) => {
+              const id = e.target.value
+              setDriverId(id)
+              const found = (drivers || []).find(d => d.value === id)
+              setForm(f => ({ ...f, conductorXp: found ? found.label : '' }))
+            }}
+          >
+            <option value="">Seleccionar</option>
+            {(drivers || []).filter(d => d.rol === 'conductor').map(d => (<option key={d.value} value={d.value}>{d.label}</option>))}
+          </select>
+        </label>
+        <label>
+          <span>Peoneta</span>
+          <select
+            name="peoneta"
+            value={peonetaId}
+            onChange={(e) => {
+              const id = e.target.value
+              setPeonetaId(id)
+              const found = (drivers || []).find(d => d.value === id)
+              setForm(f => ({ ...f, peoneta: found ? found.label : '' }))
+            }}
+          >
+            <option value="">Seleccionar</option>
+            {(drivers || []).map(d => (<option key={d.value} value={d.value}>{d.label}</option>))}
+          </select>
         </label>
         <label>
           <span>Camión</span>
@@ -164,6 +226,7 @@ function EditForm({ factura, onClose, onSaved, getAuthHeaders }) {
 
 function FacturasList({ getAuthHeaders, canEdit }) {
   const clientes = useClientes(getAuthHeaders)
+  const clientMap = useMemo(() => Object.fromEntries((clientes || []).map(c => [String(c.value), c.label])), [clientes])
   // # Estado de filtros y datos de la tabla
   const [filters, setFilters] = useState({ cliente: '', fecha: '', guia: '', q: '' })
   const [data, setData] = useState([])
@@ -174,6 +237,10 @@ function FacturasList({ getAuthHeaders, canEdit }) {
   const [preview, setPreview] = useState({ open: false, src: '', kind: '' })
   const [sort, setSort] = useState('') // '', 'guia_asc', 'guia_desc'
   const [details, setDetails] = useState({ open: false, factura: null })
+  // Slider/scroll horizontal
+  const wrapRef = useRef(null)
+  const [scrollX, setScrollX] = useState(0)
+  const [maxScrollX, setMaxScrollX] = useState(0)
 
   const queryString = useMemo(() => {
     // # Serializa filtros en querystring
@@ -294,6 +361,23 @@ function FacturasList({ getAuthHeaders, canEdit }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Medir scroll máximo y sincronizar slider
+  const measureScroll = () => {
+    const el = wrapRef.current
+    if (!el) return
+    const max = Math.max(0, el.scrollWidth - el.clientWidth)
+    setMaxScrollX(max)
+    setScrollX(el.scrollLeft)
+  }
+  useEffect(() => { measureScroll() }, [data])
+  useEffect(() => {
+    const onResize = () => measureScroll()
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+  const onScrollWrap = () => { const el = wrapRef.current; if (el) setScrollX(el.scrollLeft) }
+  const onSlide = (v) => { const el = wrapRef.current; if (!el) return; el.scrollLeft = Number(v); setScrollX(Number(v)) }
+
   const onChange = (e) => {
     // # Actualiza filtros de búsqueda
     const { name, value } = e.target
@@ -341,7 +425,13 @@ function FacturasList({ getAuthHeaders, canEdit }) {
         <div style={{ color: '#9b1c1c', marginTop: 8 }}>{error}</div>
       )}
 
-      <div className="table-wrapper">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '4px 0 8px' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ color: '#555', fontSize: 12 }}>Desplazamiento</span>
+          <input type="range" min={0} max={Math.max(0, maxScrollX)} value={Math.min(scrollX, maxScrollX)} onChange={e => onSlide(e.target.value)} style={{ width: 260 }} />
+        </label>
+      </div>
+      <div ref={wrapRef} className="table-wrapper" onScroll={onScrollWrap}>
         <table className="table">
           <thead>
             <tr>
@@ -367,31 +457,10 @@ function FacturasList({ getAuthHeaders, canEdit }) {
                   N° factura {sort === 'guia_desc' ? '↓' : '↑'}
                 </button>
               </th>
-              <th className="col-hide-sm">Conductor</th>
+              <th className="col-hide-sm">Cliente</th>
               <th className="col-hide-sm">Ruta</th>
+              <th className="col-hide-sm">Conductor</th>
               <th className="col-estado">Estado</th>
-              <th className="col-hide-sm">
-                <button
-                  type="button"
-                  className="menu-button"
-                  style={{ width: 'auto' }}
-                  onClick={() => toggleSortAndLoad('kg')}
-                  title="Ordenar por KG"
-                >
-                  KG {sort === 'kg_desc' ? '↓' : sort === 'kg_asc' ? '↑' : ''}
-                </button>
-              </th>
-              <th className="col-hide-sm">
-                <button
-                  type="button"
-                  className="menu-button"
-                  style={{ width: 'auto' }}
-                  onClick={() => toggleSortAndLoad('vueltas')}
-                  title="Ordenar por Vueltas"
-                >
-                  Vueltas {sort === 'vueltas_desc' ? '↓' : sort === 'vueltas_asc' ? '↑' : ''}
-                </button>
-              </th>
               <th className="col-hide-sm">Archivos</th>
               <th className="col-acciones">Acciones</th>
             </tr>
@@ -404,11 +473,10 @@ function FacturasList({ getAuthHeaders, canEdit }) {
                 <tr key={f.id}>
                   <td className="col-fecha">{f.fecha}</td>
                   <td className="col-numero">{numeroFactura}</td>
-                  <td className="col-hide-sm">{f.conductor_xp || ''}</td>
+                  <td className="col-hide-sm">{clientMap[String(f.cliente)] || String(f.cliente || '')}</td>
                   <td className="col-hide-sm">{ruta}</td>
+                  <td className="col-hide-sm">{f.conductor_xp || ''}</td>
                   <td className="col-estado"><StatusBadge estado={f.estado} /></td>
-                  <td className="col-hide-sm">{f.kg != null ? f.kg : ''}</td>
-                  <td className="col-hide-sm">{f.vueltas != null ? f.vueltas : ''}</td>
                   <td className="col-hide-sm">
                     {(f.archivos || []).map((a, i) => {
                       const isImg = String(a.mimetype || '').startsWith('image/')
@@ -421,43 +489,46 @@ function FacturasList({ getAuthHeaders, canEdit }) {
                               src={inlineSrc}
                               alt={a.filename}
                               className="thumb"
-                              onClick={() => setPreview({ open: true, src: inlineSrc, kind: 'image' })}
+                              onClick={() => setPreview({ open: true, src: inlineSrc, kind: 'image', download: `/files/${a.filename}`, name: a.filename })}
                             />
                           ) : isPdf ? (
                             <button
-                              className="menu-button"
+                              className="menu-button btn-sm"
                               style={{ width: 'auto' }}
-                              onClick={() => setPreview({ open: true, src: inlineSrc, kind: 'pdf' })}
+                              onClick={() => setPreview({ open: true, src: inlineSrc, kind: 'pdf', download: `/files/${a.filename}`, name: a.filename })}
                             >
                               Ver PDF
                             </button>
                           ) : (
                             <span style={{ fontSize: 12 }}>Archivo</span>
                           )}
-                          <a href={`/files/${a.filename}`} download={a.filename}>Descargar</a>
                         </span>
                       )
                     })}
                   </td>
                   <td className="col-acciones">
                     <button
-                      className="menu-button"
+                      className="menu-button btn-sm"
                       style={{ width: 'auto', marginRight: 6 }}
                       onClick={() => setDetails({ open: true, factura: f })}
                     >
                       Detalles
                     </button>
                     {canEdit && (
-                    <button className="menu-button" style={{ width: 'auto', marginRight: 6 }} onClick={() => setEditing(f)}>
-                      Editar
-                    </button>
+                      <button
+                        className="menu-button btn-sm"
+                        style={{ width: 'auto', marginRight: 6 }}
+                        onClick={() => setEditing(f)}
+                      >
+                        Editar
+                      </button>
                     )}
-                     <button className="menu-button" style={{ width: 'auto', marginRight: 6 }} onClick={() => openHistory(f.id)}>
+                     <button className="menu-button btn-sm" style={{ width: 'auto', marginRight: 6 }} onClick={() => openHistory(f.id)}>
                        Historial
                      </button>
                     {canEdit && (
                       <button
-                        className="menu-button"
+                        className="menu-button btn-sm"
                         style={{ width: 'auto', borderColor: '#fca5a5', background: '#fee2e2' }}
                         onClick={async () => {
                           if (!confirm('¿Eliminar esta factura?')) return
@@ -499,6 +570,7 @@ function FacturasList({ getAuthHeaders, canEdit }) {
             <div><strong>Fecha</strong><br />{details.factura.fecha || ''}</div>
             <div><strong>N° factura</strong><br />{details.factura.numero_factura || details.factura.guia || ''}</div>
             <div><strong>Conductor</strong><br />{details.factura.conductor_xp || ''}</div>
+            <div><strong>Peoneta</strong><br />{details.factura.peoneta || ''}</div>
             <div><strong>Ruta</strong><br />{details.factura.ruta || details.factura.local || ''}</div>
             <div><strong>Estado</strong><br />{details.factura.estado || ''}</div>
             <div><strong>KG</strong><br />{details.factura.kg != null ? details.factura.kg : ''}</div>
@@ -552,7 +624,14 @@ function FacturasList({ getAuthHeaders, canEdit }) {
         )}
       </Modal>
 
-      <Modal open={preview.open} onClose={() => setPreview({ open: false, src: '', kind: '' })} title={preview.kind === 'pdf' ? 'Vista previa PDF' : 'Vista previa'}>
+      <Modal
+        open={preview.open}
+        onClose={() => setPreview({ open: false, src: '', kind: '' })}
+        title={preview.kind === 'pdf' ? 'Vista previa PDF' : 'Vista previa'}
+        actions={preview.download ? (
+          <a className="menu-button btn-sm" href={preview.download} download={preview.name || ''} title="Descargar">⤓ Descargar</a>
+        ) : null}
+      >
         {preview.kind === 'image' ? (
           <div style={{ display: 'flex', justifyContent: 'center' }}>
             <img src={preview.src} alt="preview" style={{ maxWidth: '100%', maxHeight: '70vh' }} />

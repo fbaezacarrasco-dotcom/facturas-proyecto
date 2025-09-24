@@ -22,6 +22,10 @@ app.use(cors({ origin: corsOrigin, credentials: true }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// ===== Auth/JWT (debe declararse antes de CAPTCHA) =====
+const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_change_me'
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '8h' // configurable vía .env
+
 // ===== CAPTCHA verify helper (Turnstile por defecto) =====
 const CAPTCHA_ENABLED = String(process.env.CAPTCHA_ENABLED || '0').toLowerCase() === '1' || String(process.env.CAPTCHA_ENABLED || '').toLowerCase() === 'true'
 const CAPTCHA_PROVIDER = (process.env.CAPTCHA_PROVIDER || 'turnstile').toLowerCase()
@@ -92,9 +96,6 @@ app.get("/api/health/db", async (req, res) => {
 });
 
 // # Auth helpers y middleware
-const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_change_me'
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '8h' // configurable vía .env
-
 function signToken(user) {
   // Firma JWT con expiración configurable (por defecto 8h)
   return jwt.sign({ sub: user.id, role: user.role, email: user.email }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN })
@@ -362,6 +363,7 @@ const memCamionBajas = [];
 const memMantenciones = [];
 const memProveedores = [];
 const memOrdenes = [];
+const memDrivers = [];
 
 // # POST /api/facturas — Crear factura (DB o memoria)
 app.post("/api/facturas", requireRoles(['admin','editor']), upload.array("archivos", 5), async (req, res) => {
@@ -382,6 +384,7 @@ app.post("/api/facturas", requireRoles(['admin','editor']), upload.array("archiv
         dia: b.dia || null,
         fecha,
         conductor_xp: b.conductorXp || null,
+        peoneta: b.peoneta || null,
         camion: b.camion || null,
         vueltas: b.vueltas ? Number(b.vueltas) : null,
         guia: b.guia || null,
@@ -398,8 +401,8 @@ app.post("/api/facturas", requireRoles(['admin','editor']), upload.array("archiv
     }
 
     const insertFactura = `
-      INSERT INTO facturas (cliente, dia, fecha, conductor_xp, camion, vueltas, guia, local, kg, carga, observaciones, estado)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+      INSERT INTO facturas (cliente, dia, fecha, conductor_xp, peoneta, camion, vueltas, guia, local, kg, carga, observaciones, estado)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
       RETURNING id
     `
     const values = [
@@ -407,6 +410,7 @@ app.post("/api/facturas", requireRoles(['admin','editor']), upload.array("archiv
       b.dia || null,
       fecha,
       b.conductorXp || null,
+      b.peoneta || null,
       b.camion || null,
       b.vueltas ? Number(b.vueltas) : null,
       b.guia || null,
@@ -1705,6 +1709,89 @@ app.delete('/api/planificaciones/:id', requireRoles(['admin','editor']), async (
   }
 })
 
+// Analizador de filas de planificación -> métricas agregadas
+function analyzePlanRows(rows) {
+  const out = { total: 0, by_estado: {}, by_conductor: {}, by_pago: {}, by_carga: {}, by_ambiente: {}, status_key: '', driver_key: '', pago_key: '', carga_key: '', ambiente_key: '', otros: {} }
+  if (!Array.isArray(rows)) return out
+  const norm = (s) => String(s || '').trim().toLowerCase()
+  // Heurística: clave de estado/observación y de conductor
+  const keys = rows.length ? Object.keys(rows[0]) : []
+  const statusKey = keys.find(k => /observa|estado/i.test(k)) || 'estado'
+  const driverKey = keys.find(k => /conductor|xp/i.test(k)) || 'conductor'
+  const pagoKey = keys.find(k => /pago|paga|condic/i.test(k)) || 'pago'
+  const cargaKey = keys.find(k => /carga|canal|tipo.*venta/i.test(k)) || 'carga'
+  const ambienteKey = keys.find(k => /ambiente|temperatura/i.test(k)) || 'ambiente'
+  out.status_key = statusKey
+  out.driver_key = driverKey
+  out.pago_key = pagoKey
+  out.carga_key = cargaKey
+  out.ambiente_key = ambienteKey
+  const mapEstado = (txt) => {
+    const s = norm(txt)
+    if (!s) return { cat: 'otro', raw: '' }
+    // Casos específicos solicitados
+    if (s.includes('no sale') && s.includes('id') && s.includes('carga'))
+      return { cat: 'no sale por id de carga', raw: s }
+    if (s.includes('no sale') && s.includes('quiebre') && s.includes('stock'))
+      return { cat: 'no sale por quiebre de stock', raw: s }
+    if (s.includes('rechaz') && (s.includes('horario') || s.includes('hora')))
+      return { cat: 'rechazado por horario', raw: s }
+    if (s.includes('rechaz') && s.includes('temperatura'))
+      return { cat: 'rechazado por temperatura', raw: s }
+    if (s.includes('reprogram')) return { cat: 'reprogramado', raw: s }
+    if (s.includes('detalle')) return { cat: 'entregado con detalle', raw: s }
+    if (s.includes('entregado')) return { cat: 'entregado sin novedad', raw: s }
+    if (s.includes('rechaz')) return { cat: 'rechazado', raw: s }
+    return { cat: 'otro', raw: s }
+  }
+  for (const r of rows) {
+    out.total++
+    const { cat, raw } = mapEstado(r[statusKey])
+    out.by_estado[cat] = (out.by_estado[cat] || 0) + 1
+    if (cat === 'otro') {
+      const key = raw || '(vacío)'
+      out.otros[key] = (out.otros[key] || 0) + 1
+    }
+    const drv = String(r[driverKey] || '').trim()
+    if (drv) out.by_conductor[drv] = (out.by_conductor[drv] || 0) + 1
+    const pago = norm(r[pagoKey])
+    if (pago) out.by_pago[pago] = (out.by_pago[pago] || 0) + 1
+    const carga = norm(r[cargaKey])
+    if (carga) out.by_carga[carga] = (out.by_carga[carga] || 0) + 1
+    const amb = norm(r[ambienteKey])
+    if (amb) out.by_ambiente[amb] = (out.by_ambiente[amb] || 0) + 1
+  }
+  return out
+}
+
+// Stats on the fly (recibe rows)
+app.post('/api/planificaciones/analyze', requireAuth, async (req, res) => {
+  try {
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : []
+    const stats = analyzePlanRows(rows)
+    res.json({ ok: true, data: stats })
+  } catch (e) {
+    console.error('POST /api/planificaciones/analyze error:', e)
+    res.status(400).json({ ok: false, message: 'Error al analizar filas' })
+  }
+})
+
+// Stats desde una planificación guardada
+app.get('/api/planificaciones/:id/stats', requireAuth, async (req, res) => {
+  try {
+    if (SKIP_DB) return res.json({ ok: true, data: { total: 0, by_estado: {}, by_conductor: {} } })
+    const id = Number(req.params.id)
+    const { rows } = await query('SELECT rows FROM planificaciones WHERE id=$1', [id])
+    if (!rows.length) return res.status(404).json({ ok: false, message: 'Planificación no encontrada' })
+    const data = rows[0].rows || []
+    const stats = analyzePlanRows(data)
+    res.json({ ok: true, data: stats })
+  } catch (e) {
+    console.error('GET /api/planificaciones/:id/stats error:', e)
+    res.status(500).json({ ok: false, message: 'Error al obtener estadísticas' })
+  }
+})
+
 // Servir archivo inline para previsualización (imagen/pdf)
 app.get("/files/inline/:filename", (req, res) => {
   const name = path.basename(req.params.filename || "")
@@ -2065,6 +2152,86 @@ app.get('/api/ordenes', requireAuth, async (_req, res) => {
   }
 })
 
+// ===== Drivers (conductores/peonetas) =====
+// Listado público (auth) para selects
+app.get('/api/drivers', requireAuth, async (_req, res) => {
+  try {
+    if (SKIP_DB) {
+      const rows = memDrivers.filter(d => d.active !== false).sort((a,b) => (a.nombre + a.apellido).localeCompare(b.nombre + b.apellido))
+      return res.json({ ok: true, data: rows })
+    }
+    const { rows } = await query('SELECT id, nombre, apellido, rut, rol, active FROM drivers WHERE active = TRUE ORDER BY nombre ASC, apellido ASC', [])
+    return res.json({ ok: true, data: rows })
+  } catch (e) {
+    console.error('GET /api/drivers error:', e)
+    res.status(500).json({ ok: false, message: 'Error al listar conductores' })
+  }
+})
+
+// Admin: listar/crear/actualizar drivers
+app.get('/admin/drivers', requireRole('admin'), async (_req, res) => {
+  try {
+    if (SKIP_DB) return res.json({ ok: true, data: memDrivers.slice().sort((a,b) => (a.nombre + a.apellido).localeCompare(b.nombre + b.apellido)) })
+    const { rows } = await query('SELECT id, nombre, apellido, rut, rol, active, created_at FROM drivers ORDER BY nombre ASC, apellido ASC', [])
+    return res.json({ ok: true, data: rows })
+  } catch (e) {
+    console.error('GET /admin/drivers error:', e)
+    res.status(500).json({ ok: false, message: 'Error al listar conductores' })
+  }
+})
+
+app.post('/admin/drivers', requireRole('admin'), async (req, res) => {
+  try {
+    const b = req.body || {}
+    const nombre = String(b.nombre || '').trim()
+    const apellido = String(b.apellido || '').trim()
+    const rol = String(b.rol || '').toLowerCase()
+    const rut = (b.rut ? String(b.rut).trim() : null)
+    if (!nombre || !apellido) return res.status(400).json({ ok: false, message: 'nombre y apellido son requeridos' })
+    if (!['conductor','peoneta'].includes(rol)) return res.status(400).json({ ok: false, message: "rol debe ser 'conductor' o 'peoneta'" })
+
+    if (SKIP_DB) {
+      const row = { id: memId++, nombre, apellido, rut, rol, active: true, created_at: new Date().toISOString() }
+      memDrivers.push(row)
+      return res.status(201).json({ ok: true, data: row })
+    }
+    const { rows } = await query('INSERT INTO drivers (nombre, apellido, rut, rol) VALUES ($1,$2,$3,$4) RETURNING id, nombre, apellido, rut, rol, active, created_at', [nombre, apellido, rut, rol])
+    return res.status(201).json({ ok: true, data: rows[0] })
+  } catch (e) {
+    console.error('POST /admin/drivers error:', e)
+    res.status(400).json({ ok: false, message: e.message || 'Error al crear conductor' })
+  }
+})
+
+app.patch('/admin/drivers/:id', requireRole('admin'), async (req, res) => {
+  const id = Number(req.params.id)
+  try {
+    const b = req.body || {}
+    const fields = []
+    const params = []
+    if (b.nombre != null) { params.push(String(b.nombre).trim()); fields.push(`nombre = $${params.length}`) }
+    if (b.apellido != null) { params.push(String(b.apellido).trim()); fields.push(`apellido = $${params.length}`) }
+    if (b.rut != null) { params.push(b.rut ? String(b.rut).trim() : null); fields.push(`rut = $${params.length}`) }
+    if (b.rol != null) { const rol = String(b.rol).toLowerCase(); if (!['conductor','peoneta'].includes(rol)) return res.status(400).json({ ok: false, message: 'rol inválido' }); params.push(rol); fields.push(`rol = $${params.length}`) }
+    if (typeof b.active !== 'undefined') { params.push(!!b.active); fields.push(`active = $${params.length}`) }
+    if (!fields.length) return res.status(400).json({ ok: false, message: 'Nada para actualizar' })
+
+    if (SKIP_DB) {
+      const idx = memDrivers.findIndex(d => d.id === id)
+      if (idx === -1) return res.status(404).json({ ok: false, message: 'Conductor no encontrado' })
+      memDrivers[idx] = { ...memDrivers[idx], ...b }
+      return res.json({ ok: true, data: memDrivers[idx] })
+    }
+    params.push(id)
+    const { rows } = await query(`UPDATE drivers SET ${fields.join(', ')} WHERE id=$${params.length} RETURNING id, nombre, apellido, rut, rol, active, created_at`, params)
+    if (!rows.length) return res.status(404).json({ ok: false, message: 'Conductor no encontrado' })
+    return res.json({ ok: true, data: rows[0] })
+  } catch (e) {
+    console.error('PATCH /admin/drivers/:id error:', e)
+    res.status(400).json({ ok: false, message: e.message || 'Error al actualizar conductor' })
+  }
+})
+
 app.post('/api/ordenes', requireRoles(['admin','editor']), upload.array('adjuntos', 5), async (req, res) => {
   try {
     const b = req.body || {}
@@ -2127,6 +2294,7 @@ app.put("/api/facturas/:id", requireRoles(['admin','editor']), async (req, res) 
         dia: b.dia ?? prev.dia,
         fecha: b.fecha ?? prev.fecha,
         conductor_xp: b.conductorXp ?? prev.conductor_xp,
+        peoneta: b.peoneta ?? prev.peoneta,
         camion: b.camion ?? prev.camion,
         vueltas: b.vueltas != null ? Number(b.vueltas) : prev.vueltas,
         guia: b.guia ?? prev.guia,
@@ -2157,6 +2325,7 @@ app.put("/api/facturas/:id", requireRoles(['admin','editor']), async (req, res) 
       dia: b.dia ?? prev.dia,
       fecha: b.fecha ?? prev.fecha,
       conductor_xp: b.conductorXp ?? prev.conductor_xp,
+      peoneta: b.peoneta ?? prev.peoneta,
       camion: b.camion ?? prev.camion,
       vueltas: b.vueltas != null ? Number(b.vueltas) : prev.vueltas,
       guia: b.guia ?? prev.guia,
@@ -2168,8 +2337,8 @@ app.put("/api/facturas/:id", requireRoles(['admin','editor']), async (req, res) 
     }
     const sql = `
       UPDATE facturas
-      SET cliente=$1, dia=$2, fecha=$3, conductor_xp=$4, camion=$5, vueltas=$6, guia=$7, local=$8, kg=$9, carga=$10, observaciones=$11, estado=$12
-      WHERE id=$13
+      SET cliente=$1, dia=$2, fecha=$3, conductor_xp=$4, peoneta=$5, camion=$6, vueltas=$7, guia=$8, local=$9, kg=$10, carga=$11, observaciones=$12, estado=$13
+      WHERE id=$14
       RETURNING *
     `
     const { rows } = await query(sql, [
@@ -2177,6 +2346,7 @@ app.put("/api/facturas/:id", requireRoles(['admin','editor']), async (req, res) 
       values.dia,
       values.fecha,
       values.conductor_xp,
+      values.peoneta,
       values.camion,
       values.vueltas,
       values.guia,
@@ -2286,8 +2456,9 @@ const PORT = Number(process.env.PORT) || 4000;
 ;(async () => {
   try {
     if (!SKIP_DB) {
-      await initDb()
+      // Asegurar tablas base requeridas por FKs antes de crear el resto
       await ensureSeed()
+      await initDb()
       console.log("Base de datos conectada e inicializada correctamente")
     } else {
       console.log("SKIP_DB_INIT activo: corriendo en modo sin base de datos")

@@ -204,5 +204,4 @@ function FacturaCrear({ onClose, getAuthHeaders }) {
     </div>
   )
 }
-
 export default FacturaCrear

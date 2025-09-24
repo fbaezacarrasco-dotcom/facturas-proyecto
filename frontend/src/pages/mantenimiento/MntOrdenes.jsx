@@ -57,11 +57,6 @@ function MntOrdenes({ getAuthHeaders, onGoHome }) {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: 8 }}>
-        <button className="menu-button" style={{ width: 'auto' }} onClick={() => onGoHome?.()}>
-          📊 Ver gráficos (inicio)
-        </button>
-      </div>
       <h2 style={{ marginTop: 0 }}>Mantenimiento — Órdenes</h2>
       <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
         <button className="menu-button" style={{ width: 'auto', background: mode==='agregar' ? '#eef2ff' : undefined }} onClick={() => setMode('agregar')}>➕ Nueva orden</button>
