@@ -1,3 +1,5 @@
+// Editor local de planillas (sin backend): permite ajustar columnas, anchos, visibilidad y zoom.
+// Guarda/lee su estado desde localStorage bajo la clave 'plan_editor_data'.
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 export default function PlanEditor() {

@@ -1,3 +1,8 @@
+// Panel de administración.
+// Permite:
+// - Gestionar usuarios (crear, cambiar rol/activo, actualizar contraseña)
+// - Gestionar clientes (crear, renombrar, activar/desactivar)
+// - Gestionar conductores/peonetas (crear y editar campos básicos)
 import { useEffect, useState } from 'react'
 
 function Admin({ getAuthHeaders }) {

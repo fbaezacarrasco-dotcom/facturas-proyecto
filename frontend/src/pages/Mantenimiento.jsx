@@ -1,3 +1,4 @@
+// Página de mantenimiento (placeholder): muestra algunos datos de healthcheck y utilidades rápidas.
 import { useEffect, useState } from 'react'
 
 function Mantenimiento({ getAuthHeaders, onGoHome }) {

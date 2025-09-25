@@ -1,7 +1,16 @@
+// Pantalla para crear una planificación a partir de un Excel/CSV.
+// Permite:
+// - Importar una planilla y transformarla en filas/columnas editables
+// - Reordenar y eliminar columnas
+// - Elegir una columna para asignación de personal (conductores/peonetas)
+// - Buscar texto en cualquier columna
+// - Ver resúmenes (mini-dashboard) por distintos criterios
+// - Guardar la planificación en el backend
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 // Helpers: clientes y drivers
 const useClientes = (getAuthHeaders) => {
+  // Obtiene lista de clientes activos desde el backend y la normaliza para <select>
   const [list, setList] = useState([])
   useEffect(() => {
     const load = async () => {
@@ -17,6 +26,7 @@ const useClientes = (getAuthHeaders) => {
 }
 
 const useDrivers = (getAuthHeaders) => {
+  // Obtiene lista de conductores/peonetas para asignación de personal en una columna
   const [list, setList] = useState([])
   useEffect(() => {
     const load = async () => {
@@ -32,19 +42,29 @@ const useDrivers = (getAuthHeaders) => {
 }
 
 function PlanificacionCrear({ getAuthHeaders, onClose }) {
+  // Hooks de datos para selects
   const clientes = useClientes(getAuthHeaders)
   const drivers = useDrivers(getAuthHeaders)
+  // Metadatos de la planificación (cabecera)
   const [meta, setMeta] = useState({ cliente: '', fecha: '', descripcion: '' })
+  // Filas y columnas de la planilla importada/creada
   const [rows, setRows] = useState([])
   const [columns, setColumns] = useState([]) // array de nombres de columnas en orden
   const [personalCol, setPersonalCol] = useState('') // nombre de columna con dropdown (conductores/peonetas)
+  // Referencia al input file para disparar el diálogo de archivos
   const inputRef = useRef(null)
+  // Estado de carga y mensajes de feedback
   const [loading, setLoading] = useState(false)
   const [msg, setMsg] = useState('')
+  // Estadísticas calculadas por el backend para mini-dashboard
   const [stats, setStats] = useState({ total: 0, by_estado: {}, by_conductor: {} })
+  // Alternar la visualización de resúmenes
   const [showGraphs, setShowGraphs] = useState({ estado: true, pago: false, carga: false, ambiente: false, conductor: false })
+  // Anchos personalizados por columna (opcional)
   const [widths, setWidths] = useState({}) // anchos por columna
+  // Búsqueda de texto libre
   const [query, setQuery] = useState('') // búsqueda rápida
+  // Modal con la planilla completa (sin recortar)
   const [showFull, setShowFull] = useState(false) // modal de planilla completa
   // Slide bar / desplazamiento horizontal
   const wrapRef = useRef(null)
@@ -52,12 +72,15 @@ function PlanificacionCrear({ getAuthHeaders, onClose }) {
   const [maxScrollX, setMaxScrollX] = useState(0)
 
   const unionColumns = (data) => {
+    // Une todas las llaves presentes en las filas para generar el set de columnas
     const set = new Set()
     data.forEach((r) => Object.keys(r).forEach(k => { if (!set.has(k)) set.add(k) }))
     return Array.from(set)
   }
 
   const onImport = async (file) => {
+    // Importa un archivo .xlsx/.xls/.csv y pide al backend que lo convierta en JSON
+    // Luego solicita un análisis inicial para alimentar el mini-dashboard
     if (!file) return
     try {
       setLoading(true); setMsg('')
@@ -78,6 +101,7 @@ function PlanificacionCrear({ getAuthHeaders, onClose }) {
   }
 
   const addColumn = (name) => {
+    // Agrega una nueva columna vacía a la planilla
     const n = name.trim()
     if (!n) return
     if (columns.includes(n)) return alert('La columna ya existe')
@@ -86,6 +110,7 @@ function PlanificacionCrear({ getAuthHeaders, onClose }) {
   }
 
   const removeColumn = (name) => {
+    // Elimina una columna y sus valores de todas las filas
     if (!confirm(`¿Eliminar columna "${name}"?`)) return
     setColumns(cols => cols.filter(c => c !== name))
     setRows(rs => rs.map(({ [name]: _omit, ...rest }) => rest))
@@ -93,6 +118,7 @@ function PlanificacionCrear({ getAuthHeaders, onClose }) {
   }
 
   const moveColumn = (name, dir) => {
+    // Mueve una columna a la izquierda/derecha dentro del arreglo de columnas
     setColumns(cols => {
       const i = cols.indexOf(name)
       if (i === -1) return cols
@@ -106,11 +132,13 @@ function PlanificacionCrear({ getAuthHeaders, onClose }) {
   }
 
   const setCell = (rIdx, col, value) => {
+    // Actualiza el valor de una celda específica (fila rIdx, columna col)
     setRows(rs => rs.map((r, i) => i === rIdx ? { ...r, [col]: value } : r))
   }
 
   // Medir scroll horizontal máximo y sincronizar slider
   const measureScroll = () => {
+    // Calcula el máximo desplazamiento horizontal disponible
     const el = wrapRef.current
     if (!el) return
     const max = Math.max(0, el.scrollWidth - el.clientWidth)
@@ -118,6 +146,7 @@ function PlanificacionCrear({ getAuthHeaders, onClose }) {
     setScrollX(el.scrollLeft)
   }
   useEffect(() => {
+    // Inicializa y escucha cambios de tamaño de la ventana para recalcular el scroll
     measureScroll()
     const onResize = () => measureScroll()
     window.addEventListener('resize', onResize)
@@ -129,6 +158,7 @@ function PlanificacionCrear({ getAuthHeaders, onClose }) {
 
   // Drag to pan
   useEffect(() => {
+    // Permite desplazar la tabla arrastrando con el mouse (UX tipo "hand scroll")
     const el = wrapRef.current
     if (!el) return
     let isDown = false; let startX = 0; let startLeft = 0
@@ -143,6 +173,7 @@ function PlanificacionCrear({ getAuthHeaders, onClose }) {
 
   // Re-analizar cuando cambien filas (debounce simple)
   useEffect(() => {
+    // Envía las filas al backend para recalcular estadísticas cada 300ms de inactividad
     const t = setTimeout(async () => {
       try {
         if (!rows.length) { setStats({ total: 0, by_estado: {}, by_conductor: {} }); return }
@@ -154,6 +185,7 @@ function PlanificacionCrear({ getAuthHeaders, onClose }) {
   }, [rows])
 
   const onSave = async () => {
+    // Guarda la planificación: meta (cliente/fecha/descripcion) + filas
     try {
       if (!rows.length) return alert('Importa una planilla primero')
       setLoading(true); setMsg('')
@@ -170,6 +202,7 @@ function PlanificacionCrear({ getAuthHeaders, onClose }) {
 
   // Borrador: cargar y guardar automáticamente
   useEffect(() => {
+    // Al montar, intenta restaurar un borrador guardado en localStorage
     try {
       const raw = localStorage.getItem('draft_plan')
       if (raw) {
@@ -185,6 +218,7 @@ function PlanificacionCrear({ getAuthHeaders, onClose }) {
     } catch {}
   }, [])
   useEffect(() => {
+    // Cada cambio guarda un borrador en localStorage (con debounce de 400ms)
     const t = setTimeout(() => {
       try { localStorage.setItem('draft_plan', JSON.stringify({ meta, rows, columns, personalCol, widths })) } catch {}
     }, 400)

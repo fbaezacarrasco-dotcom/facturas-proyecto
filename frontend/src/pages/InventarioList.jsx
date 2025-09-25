@@ -1,3 +1,4 @@
+// Inventario de resguardos: listado con filtros, preview de imágenes, edición y exportación CSV.
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 const useClientes = (getAuthHeaders) => {

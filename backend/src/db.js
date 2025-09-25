@@ -1,3 +1,9 @@
+// Módulo de acceso a datos (PostgreSQL) y creación mínima de tablas.
+// Expone:
+// - pool: conexión compartida a PostgreSQL
+// - initDb(): crea tablas y columnas faltantes (uso dev)
+// - query(text, params): helper para ejecutar SQL parametrizado
+// - ensureSeed(): crea datos base (clientes/usuario admin) si no existen
 import pkg from 'pg'
 import bcrypt from 'bcrypt'
 import dotenv from 'dotenv';
@@ -8,6 +14,7 @@ dotenv.config();
 const { Pool } = pkg
 
 // Intenta usar DATABASE_URL si existe
+// Si hay DATABASE_URL se usa como cadena completa de conexión (p. ej. en cloud)
 const connectionString = process.env.DATABASE_URL;
 console.log("USUARIO CONECTADO:", process.env.PGUSER || process.env.DATABASE_URL);
 
@@ -24,6 +31,9 @@ export const pool = new Pool(
 );
 
 export async function initDb() {
+  // Crea tablas y columnas necesarias si no existen.
+  // Nota: esto es práctico en desarrollo; en producción es preferible un
+  // sistema formal de migraciones (p. ej. Prisma, Knex, Flyway, etc.).
   // # Crea tablas si no existen (migración mínima en runtime)
   // # En producción conviene usar un sistema de migraciones, pero esto
   // # nos permite levantar el entorno de desarrollo sin fricción.
@@ -295,7 +305,8 @@ export async function query(text, params) {
 }
 
 export async function ensureSeed() {
-  // Seed clients (if empty)
+  // Inserta datos base si las tablas están vacías.
+  // 1) Tabla de clientes (si no existe) y seed inicial
   await pool.query(`
     CREATE TABLE IF NOT EXISTS clients (
       id SERIAL PRIMARY KEY,
@@ -313,7 +324,7 @@ export async function ensureSeed() {
     }
   }
 
-  // Users table
+  // 2) Tabla de usuarios y constraint de roles
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
@@ -329,7 +340,7 @@ export async function ensureSeed() {
   await pool.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;`)
   await pool.query(`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('admin','viewer','editor'));`)
 
-  // Seed admin if none and env provided
+  // 3) Usuario admin de arranque si no hay usuarios y se entregan credenciales vía env
   const { rows: userCount } = await pool.query('SELECT COUNT(*)::int AS c FROM users')
   if (userCount[0].c === 0) {
     const adminEmail = process.env.ADMIN_EMAIL

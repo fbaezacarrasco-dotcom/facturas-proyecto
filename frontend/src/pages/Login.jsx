@@ -1,3 +1,5 @@
+// Login: autentica al usuario contra /auth/login y obtiene JWT.
+// Incluye integración opcional con CAPTCHA (Turnstile, reCAPTCHA v2 o simple interno).
 import { useEffect, useRef, useState } from 'react'
 
 // Pantalla de Login con imágenes personalizables y comentarios guiados.

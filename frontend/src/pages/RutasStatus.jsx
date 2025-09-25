@@ -1,3 +1,8 @@
+// Página para consultar y administrar el status de rutas en las últimas 24 horas.
+// Funcionalidades:
+// - Refrescar listado, copiar y compartir resumen
+// - Crear, editar y eliminar status (si `canEdit`)
+// - Ver historial de actualizaciones por ruta
 import { useEffect, useMemo, useState } from 'react'
 
 // Página simple para ver status de rutas (últimas 24h) y generar un set por defecto
@@ -70,18 +75,26 @@ function RutasStatus({ getAuthHeaders, canEdit }) {
 
   // Filas ordenadas según preferencia
   const sortedData = useMemo(() => {
-    const rows = [...data]
-    const num = (s) => {
-      const n = parseInt(String(s || '').replace(/\D/g, ''), 10)
-      return Number.isFinite(n) ? n : 0
-    }
+  const rows = [...data]
+  const num = (s) => {
+    const n = parseInt(String(s || '').replace(/\D/g, ''), 10)
+    return Number.isFinite(n) ? n : 0
+  }
+  rows.sort((a, b) => {
+    // 1. Prioridad: los que empiezan con "RUTA" van primero
+    const aIsRuta = String(a.route_code).toUpperCase().startsWith('RUTA')
+    const bIsRuta = String(b.route_code).toUpperCase().startsWith('RUTA')
+    if (aIsRuta && !bIsRuta) return -1
+    if (!aIsRuta && bIsRuta) return 1
+    // 2. Si ambos son "RUTA" o ambos no, ordena numéricamente o alfabéticamente
     if (sortMode === 'route') {
-      rows.sort((a, b) => num(a.route_code) - num(b.route_code) || String(a.route_code).localeCompare(String(b.route_code)))
+      return num(a.route_code) - num(b.route_code) || String(a.route_code).localeCompare(String(b.route_code))
     } else {
-      rows.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+      return new Date(b.created_at) - new Date(a.created_at)
     }
-    return rows
-  }, [data, sortMode])
+  })
+  return rows
+}, [data, sortMode])
 
   const copyAll = async () => {
     try {

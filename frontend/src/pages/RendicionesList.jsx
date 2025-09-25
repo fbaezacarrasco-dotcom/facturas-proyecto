@@ -1,3 +1,5 @@
+// Listado y gestión de rendiciones.
+// Ofrece filtros (fecha, chofer, búsqueda, estado de correo), edición y exportación a CSV.
 import { useEffect, useMemo, useState } from 'react'
 
 function Modal({ open, onClose, children, title }) {

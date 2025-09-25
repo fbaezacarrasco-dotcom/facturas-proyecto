@@ -67,6 +67,15 @@ Modo demo en memoria (no guarda datos al reiniciar):
   - Listado de estados de rutas (últimas 24 horas) con edición manual.
  - Limpieza automática en backend de registros con más de 24 horas.
 
+- Dashboard (viewer):
+  - Nueva pestaña "Dashboard" para el rol viewer.
+  - Permite elegir cliente y fecha o un rango para seleccionar una o varias planificaciones y graficar:
+    - Entregas por conductor, por estado, por tipo de pago, por carga o por ambiente.
+  - Tipos de gráfico: circular (donut), barras y líneas.
+  - Modo comparativo: selecciona múltiples planificaciones (por rango) y agrega métricas.
+  - Exportación: CSV de la agrupación y exportar el gráfico a SVG/PNG.
+  - Comparador de personal: debajo del dashboard se incluye una tabla para comparar Conductores y Peonetas por parámetros (entregas completas, con detalle, rechazos, reprogramadas, total). Soporta multi-selección de planificaciones y exportación a CSV.
+
 ## Endpoints útiles
 - `GET /api/health` → estado de la API.
 - `POST /api/facturas` → crear (multipart/form-data con `archivos`).
@@ -117,3 +126,6 @@ Modo demo en memoria (no guarda datos al reiniciar):
 - Autenticación real (JWT) y roles (admin vs clientes), con rutas protegidas.
 - Validaciones de negocio y permisos por cliente.
 - Paginación/descarga de reportes.
+
+## Guía de arquitectura
+- Consulta la guía completa en `docs/ARQUITECTURA.md` para una visión de alto nivel, flujos, módulos, esquema de datos y prácticas recomendadas.

@@ -1,3 +1,11 @@
+// Servidor HTTP de la API (Express)
+// Descripción general:
+// - Inicializa middlewares (CORS, JSON, urlencoded) y almacenamiento de archivos (Multer)
+// - Implementa autenticación JWT + autorización por rol
+// - Verifica CAPTCHA opcional (Turnstile, reCAPTCHA o simple interno)
+// - Expone endpoints para: facturas, resguardos (inventario), rendiciones, rutas/status,
+//   planificaciones, camiones/mantenciones/proveedores/órdenes y administración (usuarios, clientes, conductores)
+// - Soporta un modo sin base de datos (SKIP_DB_INIT) usando estructuras en memoria para desarrollo
 import "dotenv/config";
 // # Servidor HTTP de la API: Express + CORS + Multer
 // # Contiene rutas para crear/listar/editar facturas y servir archivos.
@@ -33,6 +41,14 @@ const CAPTCHA_SECRET = process.env.CAPTCHA_SECRET || ''
 const CAPTCHA_SIMPLE_TTL = process.env.CAPTCHA_SIMPLE_TTL || '120s'
 const CAPTCHA_SIMPLE_SECRET = process.env.CAPTCHA_SIMPLE_SECRET || JWT_SECRET
 
+/**
+ * Verifica CAPTCHA según el proveedor configurado.
+ * Parámetros:
+ * - token: string con el token devuelto por el widget CAPTCHA
+ * - remoteip: IP del solicitante (opcional)
+ * - answer: respuesta en modo 'simple' (suma A+B)
+ * Retorna: boolean (true si válido o si CAPTCHA está deshabilitado)
+ */
 async function verifyCaptcha(token, remoteip, answer) {
   try {
     if (!CAPTCHA_ENABLED) return true
@@ -95,12 +111,18 @@ app.get("/api/health/db", async (req, res) => {
   }
 });
 
-// # Auth helpers y middleware
+// ===== Auth helpers y middleware =====
+/** Firma un JWT con { sub, role, email } y expiración configurable. */
 function signToken(user) {
   // Firma JWT con expiración configurable (por defecto 8h)
   return jwt.sign({ sub: user.id, role: user.role, email: user.email }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN })
 }
 
+/**
+ * Extrae el token Bearer del header Authorization y lo verifica.
+ * Si es válido, deja req.user con el payload; en caso contrario, req.user = null.
+ * No corta la request: siempre llama a next().
+ */
 function authMiddleware(req, _res, next) {
   const h = req.headers['authorization'] || ''
   const m = h.match(/^Bearer\s+(.+)$/i)
@@ -110,11 +132,13 @@ function authMiddleware(req, _res, next) {
   next()
 }
 
+/** Requiere usuario autenticado (JWT válido). */
 function requireAuth(req, res, next) {
   if (!req.user) return res.status(401).json({ ok: false, message: 'Auth requerida' })
   next()
 }
 
+/** Requiere un rol específico (admin/viewer/editor). */
 function requireRole(role) {
   return (req, res, next) => {
     if (!req.user) return res.status(401).json({ ok: false, message: 'Auth requerida' })
@@ -123,7 +147,7 @@ function requireRole(role) {
   }
 }
 
-// Acepta cualquiera de los roles especificados
+/** Requiere que el usuario tenga alguno de los roles especificados. */
 function requireRoles(roles) {
   return (req, res, next) => {
     if (!req.user) return res.status(401).json({ ok: false, message: 'Auth requerida' })
@@ -132,6 +156,7 @@ function requireRoles(roles) {
   }
 }
 
+// Aplica el middleware de autenticación a todas las rutas siguientes
 app.use(authMiddleware)
 
 // Listado de clientes activos para selects en el frontend
@@ -309,11 +334,17 @@ app.patch('/admin/clients/:id', requireRole('admin'), async (req, res) => {
   }
 })
 
+// ===== Subida de archivos (Multer) =====
+// Directorio de uploads (persistente en disco) y configuración de Multer para:
+// - Evidencias de facturas/resguardos (imágenes/pdf)
+// - Planillas Excel/CSV para planificaciones
+// Nota: en producción, considera almacenamiento externo (S3, GCS) y antivirus.
 // # Configuración de subida de archivos para facturas (backend/uploads)
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadsDir = path.join(__dirname, "..", "uploads");
 fs.mkdirSync(uploadsDir, { recursive: true });
 
+// Estrategia de nombres: <nombre_sin_espacios>-<timestamp>.<ext>
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadsDir),
   filename: (_req, file, cb) => {
@@ -330,6 +361,7 @@ const allowedMimes = new Set([
   "application/pdf",
 ]);
 
+// Subida general para facturas/resguardos (imágenes/pdf)
 const upload = multer({
   storage,
   limits: { files: 5, fileSize: 15 * 1024 * 1024 }, // 15MB por archivo
@@ -339,7 +371,7 @@ const upload = multer({
   },
 });
 
-// Multer para Excel/CSV (planificación)
+// Subida de Excel/CSV para planificaciones
 const uploadExcel = multer({
   storage,
   limits: { files: 1, fileSize: 20 * 1024 * 1024 },
@@ -350,6 +382,9 @@ const uploadExcel = multer({
   }
 })
 
+// ===== Almacenamiento en memoria (modo sin DB) =====
+// Si SKIP_DB_INIT está activo, el servidor no conecta a Postgres y usa estas
+// estructuras en memoria (se pierden al reiniciar el proceso). Útil para demo/desarrollo.
 // # Almacenamiento en memoria si SKIP_DB está activo (se pierde al reiniciar)
 const memFacturas = [];
 const memHistorial = [];
@@ -1595,11 +1630,13 @@ app.post('/api/planificaciones', requireRoles(['admin','editor']), async (req, r
 app.get('/api/planificaciones', requireAuth, async (req, res) => {
   try {
     if (SKIP_DB) return res.json({ ok: true, data: [] })
-    const { cliente, fecha, limit = 50, offset = 0 } = req.query
+    const { cliente, fecha, from: fromDate, to: toDate, limit = 50, offset = 0 } = req.query
     const conds = []
     const params = []
     if (cliente) { params.push(Number(cliente)); conds.push(`p.cliente = $${params.length}`) }
     if (fecha) { params.push(fecha); conds.push(`p.fecha = $${params.length}`) }
+    if (fromDate) { params.push(fromDate); conds.push(`p.fecha >= $${params.length}`) }
+    if (toDate) { params.push(toDate); conds.push(`p.fecha <= $${params.length}`) }
     params.push(Math.min(200, Number(limit)))
     params.push(Number(offset))
     const where = conds.length ? `WHERE ${conds.join(' AND ')}` : ''
@@ -2451,7 +2488,11 @@ app.delete('/api/__dev/reset', async (req, res) => {
   }
 })
 
-// Arrancar servidor después de init DB (o en modo sin DB)
+// ===== Arranque del servidor =====
+// Inicializa la base de datos (a menos que SKIP_DB_INIT esté activo) y levanta el servidor HTTP.
+// - ensureSeed(): garantiza tablas base y un usuario admin opcional
+// - initDb(): crea tablas/columnas/índices que usa la API
+// - app.listen(PORT): inicia Express
 const PORT = Number(process.env.PORT) || 4000;
 ;(async () => {
   try {

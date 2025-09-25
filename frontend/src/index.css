@@ -1,3 +1,4 @@
+/* Estilos base y reset del proyecto. Incluye Tailwind para utilidades si se usa. */
 @import "tailwindcss";
 
 :root {
@@ -6,7 +7,7 @@
   font-weight: 400;
 
   color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
+  color: rgba(14, 13, 13, 0.87);
   background-color: #242424;
 
   font-synthesis: none;

@@ -1,8 +1,9 @@
+// Pantalla de ingreso de facturas pendientes.
+// Objetivo: capturar datos básicos de una factura y adjuntar hasta 5 archivos
+// (imágenes o PDF). Envía todo con FormData al endpoint POST /api/facturas.
 import { useEffect, useState } from 'react'
-// # Formulario de creación de factura
-// # Envía datos + archivos (hasta 5) mediante FormData a POST /api/facturas
 
-// Clientes dinámicos desde backend
+// Hook: obtiene clientes activos desde el backend para el <select>
 const useClientes = (getAuthHeaders) => {
   const [list, setList] = useState([])
   useEffect(() => {
@@ -19,6 +20,7 @@ const useClientes = (getAuthHeaders) => {
 }
 
 function FacturaCrear({ onClose, getAuthHeaders }) {
+  // Lista de clientes para selección
   const clientes = useClientes(getAuthHeaders)
   // Fecha y día por defecto (según PC)
   const now = new Date()
@@ -45,18 +47,20 @@ function FacturaCrear({ onClose, getAuthHeaders }) {
     // Estado ahora es opcional; se puede editar luego desde "Facturas pendientes"
     estado: '',
   })
+  // Archivos seleccionados por el usuario (máximo 5)
   const [archivos, setArchivos] = useState([])
+  // Flags de envío/resultado
   const [submitting, setSubmitting] = useState(false)
   const [result, setResult] = useState(null)
 
   const onChange = (e) => {
-    // # Actualiza el estado de un campo del formulario
+    // Actualiza el estado de un campo del formulario a partir del evento
     const { name, value } = e.target
     setForm((f) => ({ ...f, [name]: value }))
   }
 
   const onFilesChange = (e) => {
-    // # Controla selección de archivos (máx. 5)
+    // Controla selección de archivos (máx. 5) y los guarda en memoria
     const files = Array.from(e.target.files || [])
     if (files.length > 5) {
       alert('Máximo 5 archivos por factura')
@@ -66,7 +70,7 @@ function FacturaCrear({ onClose, getAuthHeaders }) {
   }
 
   const onSubmit = async (e) => {
-    // # Construye FormData con campos + archivos y envía al backend
+    // Construye FormData con campos + archivos y lo envía al backend
     e.preventDefault()
     if (archivos.length > 5) {
       alert('Máximo 5 archivos por factura')

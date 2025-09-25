@@ -1,3 +1,8 @@
+// Listado de planificaciones guardadas.
+// Permite:
+// - Filtrar por cliente y fecha
+// - Ver estadísticas (estado, conductor, pago, carga, ambiente) en un modal
+// - Exportar CSV por planificación
 import { useEffect, useMemo, useState } from 'react'
 
 const useClientes = (getAuthHeaders) => {
@@ -86,6 +91,25 @@ export default function PlanificacionesList({ getAuthHeaders }) {
     )
   }
 
+  const onDelete = async (id) => {
+    if (!window.confirm('¿Seguro que deseas eliminar esta planificación?')) return
+    try {
+      setLoading(true)
+      setError('')
+      const res = await fetch(`/api/planificaciones/${id}`, {
+        method: 'DELETE',
+        headers: { ...(getAuthHeaders?.() || {}) }
+      })
+      const json = await res.json()
+      if (!res.ok || !json?.ok) throw new Error(json?.message || 'Error al eliminar')
+      setData(data => data.filter(it => it.id !== id))
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const Bars = ({ map }) => {
     const entries = Object.entries(map || {})
     if (!entries.length) return <div style={{ color: '#666' }}>Sin datos</div>
@@ -133,6 +157,7 @@ export default function PlanificacionesList({ getAuthHeaders }) {
                 <td>
                   <button className="menu-button btn-sm" style={{ width: 'auto', marginRight: 6 }} onClick={() => openDetail(it)}>Ver</button>
                   <a className="menu-button btn-sm" style={{ width: 'auto' }} href={`/api/planificaciones/${it.id}/export`} target="_blank" rel="noreferrer">Exportar CSV</a>
+                  <button className="menu-button btn-sm" style={{ width: 'auto', background: '#e53e3e', color: 'white' }} onClick={() => onDelete(it.id)}>Eliminar</button>
                 </td>
               </tr>
             ))}

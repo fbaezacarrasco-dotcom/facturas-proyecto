@@ -1,3 +1,9 @@
+// Componente raíz del frontend.
+// Responsabilidades:
+// - Gestionar autenticación (persistencia de token/rol en localStorage)
+// - Renderizar el layout: sidebar + contenido, con comportamiento responsive
+// - Enrutar entre vistas internas (sin react-router) usando un estado simple `view`
+// - Pasar `getAuthHeaders` a páginas que necesitan incluir el JWT en fetch
 import { useEffect, useState } from 'react'
 import './App.css'
 import Login from './pages/Login.jsx'
@@ -12,6 +18,7 @@ import PlanificacionCrear from './pages/PlanificacionCrear.jsx'
 import PlanificacionesList from './pages/PlanificacionesList.jsx'
 import PlanEditor from './pages/PlanEditor.jsx'
 import RutasStatus from './pages/RutasStatus.jsx'
+import DashboardPage from './pages/Dashboard.jsx'
 // (planificación eliminada)
 // # Componente raíz del frontend
 // # Gestiona autenticación mock (isAuthenticated), estado de API y navegación simple por vistas.
@@ -22,7 +29,7 @@ function App() {
   const [user, setUser] = useState(null) // nombre de usuario (email)
   const [role, setRole] = useState(null) // 'admin' | 'viewer'
   const [token, setToken] = useState(null)
-  const [view, setView] = useState('menu') // 'menu' | 'crear' | 'ver' | 'resguardo' | 'inventario' | 'rendicion_crear' | 'rendiciones' | 'planificacion_crear' | 'planificaciones' | 'plan_editor' | 'rutas' | 'admin'
+  const [view, setView] = useState('menu') // 'menu' | 'dashboard' | 'crear' | 'ver' | 'resguardo' | 'inventario' | 'rendicion_crear' | 'rendiciones' | 'planificacion_crear' | 'planificaciones' | 'plan_editor' | 'rutas' | 'admin'
   const [sidebarOpen, setSidebarOpen] = useState(() => {
     try { return typeof window !== 'undefined' ? window.innerWidth > 900 : false } catch { return false }
   })
@@ -75,6 +82,7 @@ function App() {
   const handleRendiciones = () => { setView('rendiciones'); setSidebarOpen(false) }
   const handleAdmin = () => { setView('admin'); setSidebarOpen(false) }
   const handleRutas = () => { setView('rutas'); setSidebarOpen(false) }
+  const handleDashboard = () => { setView('dashboard'); setSidebarOpen(false) }
   // Eliminado: área de mantenimiento
   // (planificación eliminada)
   const handleCerrarSesion = () => {
@@ -118,18 +126,24 @@ function App() {
       <aside className={`sidebar ${sidebarOpen ? 'open' : 'closed'}`}>
         <div className="sidebar-title">
           <h1>Menú</h1>
-          <button className="menu-button" style={{ width: 'auto' }} onClick={() => setView('menu')}>
-            📊 Ver gráficos
+          <br />
+          <br />
+          <button className="menu-button" style={{ width: '50xp', height: '10xp' }} onClick={() => setView('menu')}> 
+            Inicio
           </button>
         </div>
+        {/* Dashboard para viewer: acceso directo */}
+        {role === 'viewer' && (
+          <button className="menu-button" onClick={handleDashboard}>📈 Dashboard</button>
+        )}
         <button className="menu-button" onClick={() => setShowCommercial(s => !s)}>
-          🧭 Área comercial {showCommercial ? '▲' : '▼'}
+          Área comercial {showCommercial ? '▲' : '▼'}
         </button>
         {showCommercial && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 8 }}>
             {/* Planificaciones */}
             <button className="menu-button" onClick={() => setShowPlanning(s => !s)}>
-              🗓️ Planificaciones {showPlanning ? '▲' : '▼'}
+              Planificaciones {showPlanning ? '▲' : '▼'}
             </button>
             {showPlanning && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 8 }}>
@@ -139,7 +153,7 @@ function App() {
             )}
             {/* Facturas pendientes (grupo) */}
             <button className="menu-button" onClick={() => setShowFacturas(s => !s)}>
-              🧾 Facturas pendientes {showFacturas ? '▲' : '▼'}
+              Facturas pendientes {showFacturas ? '▲' : '▼'}
             </button>
             {showFacturas && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 8 }}>
@@ -152,7 +166,7 @@ function App() {
 
             {/* Inventario (grupo) */}
             <button className="menu-button" onClick={() => setShowInventario(s => !s)}>
-              📦 Inventario {showInventario ? '▲' : '▼'}
+              Inventario {showInventario ? '▲' : '▼'}
             </button>
             {showInventario && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 8 }}>
@@ -165,7 +179,7 @@ function App() {
 
             {/* Rendiciones (grupo) */}
             <button className="menu-button" onClick={() => setShowRend(s => !s)}>
-              🧮 Rendiciones {showRend ? '▲' : '▼'}
+              Rendiciones {showRend ? '▲' : '▼'}
             </button>
             {showRend && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 8 }}>
@@ -179,13 +193,13 @@ function App() {
             {/* (Planificación eliminada) */}
 
             {/* Otras */}
-            <button className="menu-button" onClick={handleRutas}>🚦 Status rutas</button>
-            {role === 'admin' && (<button className="menu-button" onClick={handleAdmin}>🛠️ Admin</button>)}
+            <button className="menu-button" onClick={handleRutas}>🚦Status rutas🚦</button>
+            {role === 'admin' && (<button className="menu-button" onClick={handleAdmin}>Admin</button>)}
           </div>
         )}
         {/* Área de mantenimiento eliminada */}
         {/* Cerrar sesión fuera de los grupos */}
-        <button className="menu-button" onClick={handleCerrarSesion}>🚪 Cerrar sesión</button>
+        <button className="menu-button" onClick={handleCerrarSesion}>Cerrar sesión</button>
       </aside>
       {/* Backdrop para el drawer en móviles */}
       <div className={`backdrop ${sidebarOpen ? 'show' : ''}`} onClick={() => setSidebarOpen(false)} />
@@ -228,6 +242,8 @@ function App() {
           <PlanificacionesList getAuthHeaders={getAuthHeaders} />
         ) : view === 'plan_editor' ? (
           <PlanEditor />
+        ) : view === 'dashboard' ? (
+          <DashboardPage getAuthHeaders={getAuthHeaders} />
         ) : (
           <>
             <h2 style={{ marginTop: 0, marginBottom: 12 }}>Bienvenido, {user || 'usuario'}</h2>
@@ -247,6 +263,8 @@ export default App
 // Lenguaje técnico: componente con estado controlado que invoca
 //   GET /api/facturas/stats?cliente=&fecha=&estado= para obtener { total, entregada } y
 //   renderiza un donut SVG usando strokeDasharray (circunferencia = 2πr).
+
+
 function Dashboard({ getAuthHeaders }) {
   const clientes = [
     { value: '', label: 'Todos' },
@@ -261,6 +279,12 @@ function Dashboard({ getAuthHeaders }) {
   const [stats, setStats] = useState({ total: 0, entregada: 0 })
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+
+  // NUEVO: Estados para el resumen de rutas
+  const [rutasResumen, setRutasResumen] = useState([])
+  const [rutasLoading, setRutasLoading] = useState(false)
+  const [rutasError, setRutasError] = useState('')
+
 
   // Carga estadísticas del backend
   async function load() {
@@ -279,6 +303,31 @@ function Dashboard({ getAuthHeaders }) {
 
   // cargar al montar y cuando cambia algún filtro
   useEffect(() => { load() }, [cliente, fecha, estado])
+  // NUEVO: Cargar resumen de rutas al montar
+  useEffect(() => {
+    async function fetchRutasStatus() {
+      try {
+        setRutasLoading(true)
+        setRutasError('')
+        const res = await fetch('/api/rutas/status', { headers: { ...(getAuthHeaders?.() || {}) } })
+        const json = await res.json()
+        if (!res.ok || json?.ok === false) throw new Error(json?.message || 'Error al cargar')
+        // Consolidar: último status por ruta
+        const latestByRoute = new Map()
+        for (const r of json.data || []) {
+          const prev = latestByRoute.get(r.route_code)
+          if (!prev || new Date(r.created_at) > new Date(prev.created_at)) latestByRoute.set(r.route_code, r)
+        }
+        setRutasResumen(Array.from(latestByRoute.values()))
+      } catch (e) {
+        setRutasError(e.message)
+      } finally {
+        setRutasLoading(false)
+      }
+    }
+    fetchRutasStatus()
+  }, [getAuthHeaders])
+
 
   // Matemática del donut (SVG):
   //   - r = radio; c = circunferencia = 2πr
@@ -341,9 +390,35 @@ function Dashboard({ getAuthHeaders }) {
         </div>
         <div>
           <div style={{ fontSize: 16, marginBottom: 6 }}>Facturas pendientes</div>
-          <div style={{ color: '#666' }}>
+          <div style={{ color: '#666' }}>  
           </div>
         </div>
+      </div>
+      {/* CAJÓN APARTE: Resumen de rutas */}
+      <div
+        style={{
+          marginTop: 32,
+          background: '#f8fafc',
+          border: '1px solid #e5e7eb',
+          borderRadius: 8,
+          padding: 16,
+          maxWidth: 500,
+        }}
+>
+        <strong>Resumen de rutas (24h):</strong>
+        {rutasLoading && <div>Cargando rutas…</div>}
+        <br />
+        {rutasError && <div style={{ color: '#b91c1c' }}>{rutasError}</div>}
+        {rutasResumen.length > 0 && (
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            {rutasResumen.map(r => (
+              <li key={r.route_code}>
+                <b>{r.route_code}:</b> {r.status_text}
+              </li>
+            ))}
+          </ul>
+        )}
+        {rutasResumen.length === 0 && !rutasLoading && <div>No hay datos de rutas.</div>}
       </div>
     </div>
   )

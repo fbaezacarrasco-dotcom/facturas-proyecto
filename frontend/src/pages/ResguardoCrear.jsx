@@ -1,3 +1,4 @@
+// Formulario para crear resguardos (productos pendientes) con posibilidad de adjuntar imágenes.
 import { useEffect, useState } from 'react'
 
 const useClientes = (getAuthHeaders) => {

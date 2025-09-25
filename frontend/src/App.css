@@ -1,3 +1,10 @@
+/*
+  Hoja de estilos principal del frontend.
+  Estructura:
+  - Layout de la app (sidebar + contenido, responsive)
+  - Componentes base: botones, formularios, tablas, badges, modales
+  - Páginas específicas: login, planificación, dashboard
+*/
 /* Root container takes full viewport without center constraints */
 #root {
   margin: 0;
@@ -341,12 +348,12 @@ select { font-size: 13px; font-weight: 400; }
     top: 0;
     bottom: 0;
     width: min(85vw, 320px);
-    background: #fff;
+    background: #9a9999;
     z-index: 60;
     padding: 16px;
     transform: translateX(-100%);
   transition: transform 0.2s ease;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+  box-shadow: 0 10px 30px rgba(211, 42, 42, 0.15);
   }
   .sidebar.open { transform: translateX(0); }
   .sidebar.closed { transform: translateX(-100%); }
@@ -372,13 +379,16 @@ select { font-size: 13px; font-weight: 400; }
   /* En escritorio, la sidebar es fija y el botón hamburguesa no se muestra */
   .app-layout { grid-template-columns: 240px 1fr; }
   .app-layout.sidebar-closed { grid-template-columns: 240px 1fr; }
-  .sidebar { position: static; width: auto; transform: none; box-shadow: none; }
+  .sidebar { position: static; width: auto; transform: none; box-shadow: none; 
+  background: #18181b;   /* Fondo oscuro */
+  color: #f4f4f5;        /* Letras claras */}
   .backdrop { display: none !important; }
   .hamburger-btn { display: none; }
 }
 
 @media (max-width: 640px) {
-  .sidebar h1 { font-size: 18px; }
+  .sidebar h1 { font-size: 18px; 
+    color: #f4f4f5;        /* Letras claras para botones y título */}
   .menu-button { padding: 10px 12px; }
   .filters { gap: 6px; }
   .filters input, .filters select { flex: 1 1 140px; }

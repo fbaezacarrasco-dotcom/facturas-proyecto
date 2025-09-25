@@ -1,5 +1,11 @@
+// Listado de facturas pendientes con herramientas de gestión.
+// Incluye:
+// - Filtros (cliente, fecha, guía, búsqueda general) y ordenación
+// - Edición inline mediante modal (PUT), y eliminación
+// - Historial de cambios por factura
+// - Exportación CSV y eliminación masiva por filtros
+// - Vista previa/descarga de archivos asociados
 import { useEffect, useMemo, useRef, useState } from 'react'
-// # Listado con filtros, edición (PUT), historial y previsualización inline/descarga de archivos
 
 const useClientes = (getAuthHeaders) => {
   const [list, setList] = useState([{ value: '', label: 'Todos' }])
