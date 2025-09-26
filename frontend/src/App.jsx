@@ -128,7 +128,7 @@ function App() {
           <h1>Menú</h1>
           <br />
           <br />
-          <button className="menu-button" style={{ width: '50xp', height: '10xp' }} onClick={() => setView('menu')}> 
+          <button className="menu-button" style={ { width: '50xp', height: '10xp' }} onClick={() => setView('menu')}> 
             Inicio
           </button>
         </div>
@@ -147,7 +147,9 @@ function App() {
             </button>
             {showPlanning && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 8 }}>
-                <button className="menu-button" onClick={() => { setView('planificacion_crear'); setSidebarOpen(false) }}>➕ Crear planificación</button>
+                {role !== 'viewer' && (
+                  <button className="menu-button" onClick={() => { setView('planificacion_crear'); setSidebarOpen(false) }}>➕ Crear planificación</button>
+                )}
                 <button className="menu-button" onClick={() => { setView('planificaciones'); setSidebarOpen(false) }}>📄 Ver planificaciones</button>
               </div>
             )}
@@ -237,7 +239,11 @@ function App() {
         ) : view === 'admin' ? (
           <Admin getAuthHeaders={getAuthHeaders} />
         ) : view === 'planificacion_crear' ? (
-          <PlanificacionCrear getAuthHeaders={getAuthHeaders} onClose={() => setView('menu')} />
+          role === 'viewer' ? (
+            <div className="content-placeholder">No tienes permisos para crear planificaciones</div>
+          ) : (
+            <PlanificacionCrear getAuthHeaders={getAuthHeaders} onClose={() => setView('menu')} />
+          )
         ) : view === 'planificaciones' ? (
           <PlanificacionesList getAuthHeaders={getAuthHeaders} />
         ) : view === 'plan_editor' ? (
@@ -264,7 +270,6 @@ export default App
 //   GET /api/facturas/stats?cliente=&fecha=&estado= para obtener { total, entregada } y
 //   renderiza un donut SVG usando strokeDasharray (circunferencia = 2πr).
 
-
 function Dashboard({ getAuthHeaders }) {
   const clientes = [
     { value: '', label: 'Todos' },
@@ -273,6 +278,14 @@ function Dashboard({ getAuthHeaders }) {
     { value: '3', label: 'Carnicero' },
     { value: '4', label: 'Gourmet' },
   ]
+
+  useEffect(() => {
+  // Actualiza rutas al montar y cada 2 minutos
+  fetchRutasStatus()
+  const interval = setInterval(fetchRutasStatus, 2 * 60 * 1000) // 2 minutos
+  return () => clearInterval(interval)
+}, [getAuthHeaders])
+
   const [cliente, setCliente] = useState('')
   const [fecha, setFecha] = useState('')  // YYYY-MM-DD
   const [estado, setEstado] = useState('entregado_all') // 'entregado_all' o el valor exacto
@@ -280,13 +293,37 @@ function Dashboard({ getAuthHeaders }) {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
-  // NUEVO: Estados para el resumen de rutas
+  // Estados para el resumen de rutas
   const [rutasResumen, setRutasResumen] = useState([])
   const [rutasLoading, setRutasLoading] = useState(false)
   const [rutasError, setRutasError] = useState('')
 
 
-  // Carga estadísticas del backend
+  // Función que llama al API para actualizar el estado de las rutas
+  async function fetchRutasStatus() {
+    try {
+      setRutasLoading(true)
+      setRutasError('')
+      const res = await fetch('/api/rutas/status', { headers: { ...(getAuthHeaders?.() || {}) } })
+      const json = await res.json()
+      if (!res.ok || json?.ok === false) throw new Error(json?.message || 'Error al cargar')
+
+      // Consolidar: último status por ruta
+      const latestByRoute = new Map()
+      for (const r of json.data || []) {
+        const prev = latestByRoute.get(r.route_code)
+        if (!prev || new Date(r.created_at) > new Date(prev.created_at)) latestByRoute.set(r.route_code, r)
+      }
+      setRutasResumen(Array.from(latestByRoute.values()))
+    } catch (e) {
+      setRutasError(e.message)
+    } finally {
+      setRutasLoading(false)
+    }
+  }
+
+
+  // Carga estadísticas del backend (sin cambios significativos)
   async function load() {
     try {
       setLoading(true); setError('')
@@ -301,38 +338,16 @@ function Dashboard({ getAuthHeaders }) {
     } catch (e) { setError(e.message) } finally { setLoading(false) }
   }
 
-  // cargar al montar y cuando cambia algún filtro
-  useEffect(() => { load() }, [cliente, fecha, estado])
-  // NUEVO: Cargar resumen de rutas al montar
+  // 1. Cargar estadísticas al montar y cambiar filtros
+  useEffect(() => { load() }, [cliente, fecha, estado, getAuthHeaders]) 
+  
+  // 2. Cargar resumen de rutas al montar. Al usar la función ya definida, funciona correctamente.
   useEffect(() => {
-    async function fetchRutasStatus() {
-      try {
-        setRutasLoading(true)
-        setRutasError('')
-        const res = await fetch('/api/rutas/status', { headers: { ...(getAuthHeaders?.() || {}) } })
-        const json = await res.json()
-        if (!res.ok || json?.ok === false) throw new Error(json?.message || 'Error al cargar')
-        // Consolidar: último status por ruta
-        const latestByRoute = new Map()
-        for (const r of json.data || []) {
-          const prev = latestByRoute.get(r.route_code)
-          if (!prev || new Date(r.created_at) > new Date(prev.created_at)) latestByRoute.set(r.route_code, r)
-        }
-        setRutasResumen(Array.from(latestByRoute.values()))
-      } catch (e) {
-        setRutasError(e.message)
-      } finally {
-        setRutasLoading(false)
-      }
-    }
     fetchRutasStatus()
   }, [getAuthHeaders])
 
 
-  // Matemática del donut (SVG):
-  //   - r = radio; c = circunferencia = 2πr
-  //   - strokeDasharray: "trazo_visible espacio_restante"
-  //   - rotamos -90° para que empiece arriba (12 en punto)
+  // Matemática del donut (SVG)
   const percent = stats.total ? Math.round((stats.entregada / stats.total) * 100) : 0
   const r = 60
   const c = 2 * Math.PI * r
@@ -370,7 +385,7 @@ function Dashboard({ getAuthHeaders }) {
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
         <div style={{ position: 'relative', width: 160, height: 160 }}>
-          {/* SVG base: un anillo gris de fondo y un anillo verde proporcional al % */}
+          {/* SVG para el donut */}
           <svg viewBox="0 0 160 160" width="160" height="160">
             <circle cx="80" cy="80" r="60" stroke="#e5e7eb" strokeWidth="18" fill="none" />
             <circle
@@ -382,7 +397,6 @@ function Dashboard({ getAuthHeaders }) {
               transform="rotate(-90 80 80)"
             />
           </svg>
-          {/* Etiquetas centradas: porcentaje grande y detalle x/y */}
           <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column' }}>
             <div style={{ fontSize: 22, fontWeight: 700 }}>{percent}%</div>
             <div style={{ fontSize: 12, color: '#666' }}>{stats.entregada}/{stats.total} entregadas</div>
@@ -394,6 +408,7 @@ function Dashboard({ getAuthHeaders }) {
           </div>
         </div>
       </div>
+      
       {/* CAJÓN APARTE: Resumen de rutas */}
       <div
         style={{
@@ -405,17 +420,42 @@ function Dashboard({ getAuthHeaders }) {
           maxWidth: 500,
         }}
 >
-        <strong>Resumen de rutas (24h):</strong>
-        {rutasLoading && <div>Cargando rutas…</div>}
-        <br />
-        {rutasError && <div style={{ color: '#b91c1c' }}>{rutasError}</div>}
-        {rutasResumen.length > 0 && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <strong>Resumen de rutas</strong>
+          {/* BOTÓN DE ACTUALIZAR RUTAS (CORREGIDO CON TEXTO) */}
+          <button
+            onClick={fetchRutasStatus}
+            disabled={rutasLoading}
+            style={{
+              padding: '4px 8px',
+              fontSize: 12,
+              cursor: rutasLoading ? 'default' : 'pointer',
+              opacity: rutasLoading ? 0.8 : 1,
+              backgroundColor: '#e1e1e3ff',
+              border: '1px solid #d1d5db',
+              borderRadius: 4,
+            }}
+          >
+            {/* ESTA PARTE ES LA CLAVE PARA QUE SE VEA: */}
+            {rutasLoading ? 'Actualizando...' : '🔄 Actualizar'}
+          </button>
+        </div>
+        
+       {rutasResumen.length > 0 && (
           <ul style={{ margin: 0, paddingLeft: 18 }}>
-            {rutasResumen.map(r => (
-              <li key={r.route_code}>
-                <b>{r.route_code}:</b> {r.status_text}
-              </li>
-            ))}
+            {rutasResumen
+              .slice() // copia para no mutar el estado
+              .sort((a, b) => {
+                // Extrae el número de la ruta (ej: "RUTA 1" => 1)
+                const numA = parseInt(String(a.route_code).replace(/\D/g, ''), 10) || 0
+                const numB = parseInt(String(b.route_code).replace(/\D/g, ''), 10) || 0
+                return numA - numB
+              })
+              .map(r => (
+                <li key={r.route_code}>
+                  <b>{r.route_code}:</b> {r.status_text}
+                </li>
+              ))}
           </ul>
         )}
         {rutasResumen.length === 0 && !rutasLoading && <div>No hay datos de rutas.</div>}

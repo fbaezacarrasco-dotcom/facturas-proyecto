@@ -1,5 +1,5 @@
 // Listado y gestión de rendiciones.
-// Ofrece filtros (fecha, chofer, búsqueda, estado de correo), edición y exportación a CSV.
+// Ofrece filtros (fecha, cliente, búsqueda, estado de correo), edición y exportación a CSV.
 import { useEffect, useMemo, useState } from 'react'
 
 function Modal({ open, onClose, children, title }) {
@@ -17,6 +17,7 @@ function Modal({ open, onClose, children, title }) {
   )
 }
 
+
 // Muestra el estado del correo con icono + texto: Enviado / No enviado
 function CorreoBadge({ value }) {
   if (value === true) {
@@ -31,13 +32,14 @@ function CorreoBadge({ value }) {
 function EditForm({ item, onClose, onSaved, getAuthHeaders }) {
   const [form, setForm] = useState({
     fecha: item.fecha || '',
-    chofer: item.chofer || '',
+    cliente: item.cliente || '',
     camion: item.camion || '',
     producto: item.producto || '',
     cantidad: item.cantidad ?? '',
     local: item.local || '',
     numeroPedido: item.numero_pedido || item.numeroPedido || '',
     numeroFactura: item.numero_factura || item.numeroFactura || '',
+    numeroOrden: item.numero_Orden || item.numeroOrden || '',
     valorFactura: item.valor_factura ?? item.valorFactura ?? '',
     condicionPago: item.condicion_pago || item.condicionPago || '',
     correoEnviado: item.correo_enviado ?? false,
@@ -82,8 +84,8 @@ function EditForm({ item, onClose, onSaved, getAuthHeaders }) {
           <input type="date" name="fecha" value={form.fecha} onChange={onChange} />
         </label>
         <label>
-          <span>Chofer</span>
-          <input name="chofer" value={form.chofer} onChange={onChange} />
+          <span>Cliente</span>
+          <input name="cliente" value={form.cliente} onChange={onChange} />
         </label>
         <label>
           <span>Camión</span>
@@ -109,6 +111,11 @@ function EditForm({ item, onClose, onSaved, getAuthHeaders }) {
           <span>Número de factura</span>
           <input name="numeroFactura" value={form.numeroFactura} onChange={onChange} />
         </label>
+        <label>
+            <span>Número de orden</span>
+            <input name="numeroOrden" value={form.numeroOrden} onChange={onChange} />
+          </label>
+          <label></label>
         <label>
           <span>Valor de la factura</span>
           <input type="number" step="0.01" name="valorFactura" value={form.valorFactura} onChange={onChange} />
@@ -146,11 +153,12 @@ function EditForm({ item, onClose, onSaved, getAuthHeaders }) {
 }
 
 function RendicionesList({ getAuthHeaders, canEdit }) {
-  const [filters, setFilters] = useState({ fecha: '', chofer: '', correo: '', q: '' })
+  const [filters, setFilters] = useState({ fecha: '', cliente: '', correo: '', q: '' })
   const [data, setData] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [editing, setEditing] = useState(null)
+  const [details, setDetails] = useState(null)
 
   const queryString = useMemo(() => {
     const p = new URLSearchParams()
@@ -204,7 +212,7 @@ function RendicionesList({ getAuthHeaders, canEdit }) {
       <h2 style={{ marginTop: 0 }}>Rendiciones</h2>
       <div className="filters sticky-filters">
         <input type="date" name="fecha" value={filters.fecha} onChange={onChange} />
-        <input name="chofer" value={filters.chofer} onChange={onChange} placeholder="Chofer" />
+        <input name="cliente" value={filters.cliente} onChange={onChange} placeholder="Cliente" />
         <input name="q" value={filters.q} onChange={onChange} placeholder="Buscar general" />
         <select name="correo" value={filters.correo} onChange={onChange} title="Filtrar por correo enviado">
           <option value="">Correo: todos</option>
@@ -224,11 +232,7 @@ function RendicionesList({ getAuthHeaders, canEdit }) {
           <thead>
             <tr>
               <th>Fecha</th>
-              <th>Chofer</th>
-              <th>Camión</th>
-              <th>Producto</th>
-              <th>Cantidad</th>
-              <th>Local</th>
+              <th>Cliente</th>
               <th>N° pedido</th>
               <th>N° factura</th>
               <th>Valor factura</th>
@@ -243,11 +247,7 @@ function RendicionesList({ getAuthHeaders, canEdit }) {
             {data.map((r) => (
               <tr key={r.id}>
                 <td>{r.fecha}</td>
-                <td>{r.chofer || ''}</td>
-                <td>{r.camion || ''}</td>
-                <td>{r.producto || ''}</td>
-                <td>{r.cantidad != null ? r.cantidad : ''}</td>
-                <td>{r.local || ''}</td>
+                <td>{r.cliente || r.chofer ||''}</td>
                 <td>{r.numero_pedido || ''}</td>
                 <td>{r.numero_factura || ''}</td>
                 <td>{r.valor_factura != null ? r.valor_factura : ''}</td>
@@ -256,35 +256,86 @@ function RendicionesList({ getAuthHeaders, canEdit }) {
                 <td>{r.total != null ? r.total : ''}</td>
                 <td>{r.observaciones || ''}</td>
                 <td>
-                  {canEdit && (
-                    <>
-                      <button className="menu-button" style={{ width: 'auto', marginRight: 6 }} onClick={() => setEditing(r)}>
-                        Editar
-                      </button>
-                      <button
-                        className="menu-button"
-                        style={{ width: 'auto' }}
-                        onClick={async () => {
-                          if (!confirm('¿Eliminar esta rendición?')) return
-                          try {
-                            const res = await fetch(`/api/rendiciones/${r.id}`, { method: 'DELETE', headers: { ...(getAuthHeaders?.() || {}) } })
-                            const json = await res.json().catch(() => ({}))
-                            if (!res.ok || json?.ok === false) throw new Error(json?.message || 'Error al eliminar')
-                            load()
-                          } catch (e) { alert(e.message) }
-                        }}
-                      >
-                        Eliminar
-                      </button>
-                    </>
-                  )}
+                  <button
+                      className="menu-button"
+                      style={{ width: 'auto', marginRight: 6 }}
+                      onClick={() => setDetails(r)}
+                    >
+                      Detalles
+                    </button>
+                    {canEdit && (
+                      <>
+                        <button className="menu-button" style={{ width: 'auto', marginRight: 6 }} onClick={() => setEditing(r)}>
+                          Editar
+                        </button>
+                        <button
+                          className="menu-button"
+                          style={{ width: 'auto' }}
+                          onClick={async () => {
+                            if (!confirm('¿Eliminar esta rendición?')) return
+                            try {
+                              const res = await fetch(`/api/rendiciones/${r.id}`, { method: 'DELETE', headers: { ...(getAuthHeaders?.() || {}) } })
+                              const json = await res.json().catch(() => ({}))
+                              if (!res.ok || json?.ok === false) throw new Error(json?.message || 'Error al eliminar')
+                              load()
+                            } catch (e) { alert(e.message) }
+                          }}
+                        >
+                          Eliminar
+                        </button>
+                      </>
+                    )}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-
+      <Modal open={!!details} onClose={() => setDetails(null)} title={`Detalles rendición #${details?.id}`}>
+        {details && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div><b>Fecha:</b> {details.fecha}</div>
+            <div><b>Cliente:</b> {details.cliente || details.chofer || ''}</div>
+            <div><b>N° pedido:</b> {details.numero_pedido}</div>
+            <div><b>N° factura:</b> {details.numero_factura}</div>
+            <div><b>Valor factura:</b> {details.valor_factura}</div>
+            <div><b>Condición pago:</b> {details.condicion_pago}</div>
+            <div><b>Correo:</b> <CorreoBadge value={details.correo_enviado ?? details.correoEnviado ?? null} /></div>
+            <div><b>Total:</b> {details.total}</div>
+            <div style={{ gridColumn: '1 / -1' }}><b>Observaciones:</b> {details.observaciones}</div>
+            {canEdit && (
+              <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 12, marginTop: 16 }}>
+                <button
+                  className="menu-button"
+                  style={{ background: '#e0e7ff', borderColor: '#6366f1', color: '#3730a3', width: 'auto' }}
+                  onClick={() => {
+                    setEditing(details)
+                    setDetails(null)
+                  }}
+                >
+                  Editar
+                </button>
+                <button
+                  className="menu-button"
+                  style={{ background: '#fee2e2', borderColor: '#fca5a5', color: '#b91c1c', width: 'auto' }}
+                  onClick={async () => {
+                    if (!window.confirm('¿Eliminar esta rendición?')) return
+                    try {
+                      const res = await fetch(`/api/rendiciones/${details.id}`, { method: 'DELETE', headers: { ...(getAuthHeaders?.() || {}) } })
+                      const json = await res.json().catch(() => ({}))
+                      if (!res.ok || json?.ok === false) throw new Error(json?.message || 'Error al eliminar')
+                      setDetails(null)
+                      load()
+                    } catch (e) { alert(e.message) }
+                  }}
+                >
+                  Eliminar
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
       <Modal open={!!editing} onClose={() => setEditing(null)} title={`Editar rendición #${editing?.id}`}>
         {editing && (
           <EditForm item={editing} onClose={() => setEditing(null)} onSaved={load} getAuthHeaders={getAuthHeaders} />

@@ -17,6 +17,8 @@ const useClientes = (getAuthHeaders) => {
 }
 
 function ResguardoCrear({ onClose, getAuthHeaders }) {
+
+  const [showInfo, setShowInfo] = useState(false)
   const clientes = useClientes(getAuthHeaders)
   const now = new Date()
   const yyyy = now.getFullYear()
@@ -72,9 +74,29 @@ function ResguardoCrear({ onClose, getAuthHeaders }) {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                  <button className="menu-button" style={{ width: 'auto' }} onClick={() => setShowInfo(true)}>ℹ️</button>
         <h2 style={{ margin: 0 }}>Agregar resguardo</h2>
         <button className="menu-button" style={{ width: 'auto' }} onClick={onClose}>Volver</button>
+        
       </div>
+
+      {showInfo && (
+            <div className="modal-overlay" role="dialog" aria-modal="true">
+              <div className="modal-card" style={{ maxWidth: 480 }}>
+                <div className="modal-header">
+                  <h3>Instrucciones</h3>
+                  <button className="menu-button" style={{ width: 'auto' }} onClick={() => setShowInfo(false)}>Cerrar</button>
+                </div>
+                <div className="modal-body" style={{ fontSize: 15 }}>
+                  <ul>
+                    <li>Bienvenido al portal para ingresar el resguardo</li>
+                    <br />
+                    <li>Ingresa los datos correspondientes para almacenar los datos de resguardo, y luego podras visualizarlos en la pagina "ver inverntario"</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          )}
 
       {result && (
         <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 8, background: result.ok ? '#e8f7ec' : '#fdeaea', color: result.ok ? '#1e6f3d' : '#9b1c1c', border: `1px solid ${result.ok ? '#bfe5c9' : '#f4c7c7'}` }}>

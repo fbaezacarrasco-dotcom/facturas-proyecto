@@ -14,12 +14,12 @@ function RendicionCrear({ onClose, getAuthHeaders }) {
     // Fecha inicial: hoy en formato YYYY-MM-DD, usando Date -> ISO -> slice(0,10)
     fecha: new Date().toISOString().slice(0, 10),
     // Datos generales de la rendición
-    chofer: '',        // nombre o identificador del chofer
-    camion: '',        // camión utilizado
+    cliente: '',        // nombre de cliente
     // Campos solicitados adicionales
     producto: '',      // descripción del producto
     cantidad: '',      // cantidad de producto
     local: '',         // local/sucursal
+    numeroOrden: '',    // número de orden asociado
     numeroPedido: '',  // número de pedido asociado
     numeroFactura: '', // número de factura
     valorFactura: '',  // monto de la factura (string; se valida en el backend como número)
@@ -110,23 +110,18 @@ function RendicionCrear({ onClose, getAuthHeaders }) {
         <div className="grid-2">
           {/* Fecha de la rendición */}
           <label>
-            <span>Fecha</span>
+            <span>Fecha de rendición</span>
             <input type="date" name="fecha" value={form.fecha} onChange={onChange} required />
           </label>
-          {/* Chofer responsable */}
+          {/* cliente */}
           <label>
-            <span>Chofer</span>
-            <input name="chofer" value={form.chofer} onChange={onChange} />
-          </label>
-          {/* Identificación del camión */}
-          <label>
-            <span>Camión</span>
-            <input name="camion" value={form.camion} onChange={onChange} />
+            <span>Cliente</span>
+            <input name="cliente" value={form.cliente} onChange={onChange} />
           </label>
           {/* Producto, cantidad y local */}
           <label>
             <span>Producto</span>
-            <input name="producto" value={form.producto} onChange={onChange} placeholder="Ej: Yogur descremado 1L" />
+            <input name="producto" value={form.producto} onChange={onChange} />
           </label>
           <label>
             <span>Cantidad</span>
@@ -138,12 +133,16 @@ function RendicionCrear({ onClose, getAuthHeaders }) {
           </label>
           {/* Campos administrativos adicionales */}
           <label>
-            <span>Número de pedido</span>
+            <span>Número de orden</span>
             <input name="numeroPedido" value={form.numeroPedido} onChange={onChange} />
           </label>
           <label>
             <span>Número de factura</span>
             <input name="numeroFactura" value={form.numeroFactura} onChange={onChange} />
+          </label>
+          <label>
+            <span>Número de orden</span>
+            <input name="numeroOrden" value={form.numeroOrden} onChange={onChange} />
           </label>
           <label>
             <span>Valor de la factura</span>
@@ -160,10 +159,13 @@ function RendicionCrear({ onClose, getAuthHeaders }) {
             <span>Condición de pago</span>
             <select name="condicionPago" value={form.condicionPago} onChange={onChange}>
               <option value="">Seleccionar</option>
+              <option value="efectivo">efectivo</option>
               <option value="transferencia">transferencia</option>
               <option value="30 dias">30 dias</option>
-              <option value="efectivo">efectivo</option>
+              <option value="30 dias">40 dias</option>
+              <option value="30 dias">15 dias</option>
               <option value="ecommerce">ecommerce</option>
+              <option value="otro">otro</option>
             </select>
           </label>
           {/* Total y observaciones generales */}
@@ -189,5 +191,4 @@ function RendicionCrear({ onClose, getAuthHeaders }) {
     </div>
   )
 }
-
 export default RendicionCrear

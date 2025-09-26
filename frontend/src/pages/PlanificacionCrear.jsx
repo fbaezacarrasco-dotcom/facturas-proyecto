@@ -42,6 +42,25 @@ const useDrivers = (getAuthHeaders) => {
 }
 
 function PlanificacionCrear({ getAuthHeaders, onClose }) {
+
+  const [showInfo, setShowInfo] = useState(false)
+
+  const limpiarTodo = () => {
+    if (!window.confirm('¿Seguro que deseas limpiar toda la información?')) return
+    setMeta({ cliente: '', fecha: '', descripcion: '' })
+    setRows([])
+    setColumns([])
+    setPersonalCol('')
+    setMsg('')
+    setStats({ total: 0, by_estado: {}, by_conductor: {} })
+    setShowGraphs({ estado: true, pago: false, carga: false, ambiente: false, conductor: false })
+    setWidths({})
+    setQuery('')
+    setShowFull(false)
+    setNewCol('')
+    try { localStorage.removeItem('draft_plan') } catch {}
+  }
+
   // Hooks de datos para selects
   const clientes = useClientes(getAuthHeaders)
   const drivers = useDrivers(getAuthHeaders)
@@ -224,7 +243,7 @@ function PlanificacionCrear({ getAuthHeaders, onClose }) {
     }, 400)
     return () => clearTimeout(t)
   }, [meta, rows, columns, personalCol, widths])
-
+  
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
@@ -233,6 +252,8 @@ function PlanificacionCrear({ getAuthHeaders, onClose }) {
           <button className="menu-button" style={{ width: 'auto' }} onClick={() => inputRef.current?.click()} disabled={loading}>📄 Importar Excel</button>
           <input ref={inputRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={(e) => onImport(e.target.files?.[0])} />
           <button className="menu-button" style={{ width: 'auto' }} onClick={onSave} disabled={loading || !rows.length}>{loading ? 'Guardando…' : '💾 Guardar'}</button>
+          <button className="menu-button" style={{ width: 'auto' }} onClick={limpiarTodo} disabled={loading}>🧹 Limpiar todo</button>
+          <button className="menu-button" style={{ width: 'auto' }} onClick={() => setShowInfo(true)}>ℹ️</button>
           <button className="menu-button" style={{ width: 'auto' }} onClick={onClose}>Volver</button>
         </div>
       </div>
@@ -242,7 +263,7 @@ function PlanificacionCrear({ getAuthHeaders, onClose }) {
       {/* Controles de visualización de gráficos */}
       <div className="factura-form" style={{ marginBottom: 8 }}>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-          <div style={{ fontSize: 13, color: '#555' }}>Mostrar:</div>
+          <div style={{ fontSize: 13, color: '#0c0b0bff' }}>Mostrar:</div>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             <input type="checkbox" checked={showGraphs.estado} onChange={e => setShowGraphs(s => ({ ...s, estado: e.target.checked }))} />
             <span>Estado</span>
@@ -449,6 +470,26 @@ function PlanificacionCrear({ getAuthHeaders, onClose }) {
             </table>
           </div>
 
+          {showInfo && (
+            <div className="modal-overlay" role="dialog" aria-modal="true">
+              <div className="modal-card" style={{ maxWidth: 480 }}>
+                <div className="modal-header">
+                  <h3>Instrucciones</h3>
+                  <button className="menu-button" style={{ width: 'auto' }} onClick={() => setShowInfo(false)}>Cerrar</button>
+                </div>
+                <div className="modal-body" style={{ fontSize: 15 }}>
+                  <ul>
+                    <li>Importa un archivo Excel o CSV para comenzar.</li>
+                    <li>Puedes agregar, eliminar y mover columnas según tu necesidad.</li>
+                    <li>Asigna la columna de personal para seleccionar conductores o peonetas.</li>
+                    <li>Utiliza el botón "Guardar" para almacenar la planificación.</li>
+                    <li>El botón "Limpiar todo" borra la información actual y el borrador.</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          )}
+
           {showFull && (
             <div className="modal-overlay" role="dialog" aria-modal="true">
               <div className="modal-card" style={{ width: 'min(1200px, 96vw)', maxHeight: '90vh' }}>
@@ -473,11 +514,21 @@ function PlanificacionCrear({ getAuthHeaders, onClose }) {
                             <th key={c} title={c} style={{ whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
                                 <span style={{ fontWeight: personalCol === c ? 700 : 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1, minWidth: 0 }}>{c}</span>
-                              </div>
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
+                              {/* Botones para mover y eliminar columna */}
+                              <button className="menu-button btn-sm" style={{ width: 'auto' }} onClick={() => moveColumn(c, 'left')}>←</button>
+                              <button className="menu-button btn-sm" style={{ width: 'auto' }} onClick={() => moveColumn(c, 'right')}>→</button>
+                              <button
+                                className="menu-button btn-sm"
+                                title="Eliminar columna"
+                                style={{ width: 'auto', borderColor: '#fca5a5', background: '#fee2e2' }}
+                                onClick={() => removeColumn(c)}
+                              >✕</button>
+                            </div>
+                          </th>
+                        ))}
+                        <th></th>
+                      </tr>
+                    </thead>
                       <tbody>
                         {rows
                           .filter(r => {
@@ -499,6 +550,16 @@ function PlanificacionCrear({ getAuthHeaders, onClose }) {
                                 )}
                               </td>
                             ))}
+                            <td>
+                              <button
+                                className="menu-button btn-sm"
+                                style={{ width: 'auto', borderColor: '#fca5a5', background: '#fee2e2' }}
+                                title="Eliminar fila"
+                                onClick={() => setRows(rs => rs.filter((_, idx) => idx !== i))}
+                              >
+                                ✕
+                              </button>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -510,6 +571,31 @@ function PlanificacionCrear({ getAuthHeaders, onClose }) {
           )}
         </>
       )}
+
+          {showInfo && (
+            <div className="modal-overlay" role="dialog" aria-modal="true">
+              <div className="modal-card" style={{ maxWidth: 480 }}>
+                <div className="modal-header">
+                  <h3>Instrucciones</h3>
+                  <button className="menu-button" style={{ width: 'auto' }} onClick={() => setShowInfo(false)}>Cerrar</button>
+                </div>
+                <div className="modal-body" style={{ fontSize: 15 }}>
+                  <ul>
+                    <li>Importa tu planificación en formato Excel o CSV para comenzar.</li>
+                    <br/>                  
+                    <li>Idealmente debes subir archivo listo para lectura pero tambien puedes agregar, eliminar y mover columnas según tu necesidad.</li>
+                    <br/>
+                    <li>(Opcional) Asigna la columna de personal para seleccionar conductores o peonetas. (nutrisco como conductores-xp)</li>
+                    <br/>
+                    <li>Utiliza el botón "Guardar" para almacenar la planificación.</li>
+                    <br/>
+                    <li>*El botón "Limpiar todo" borra la información actual y el borrador.*</li>
+                    
+                  </ul>
+                </div>
+              </div>
+            </div>
+          )}
     </div>
   )
 }

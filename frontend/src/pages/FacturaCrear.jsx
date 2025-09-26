@@ -20,6 +20,9 @@ const useClientes = (getAuthHeaders) => {
 }
 
 function FacturaCrear({ onClose, getAuthHeaders }) {
+
+  const [showInfo, setShowInfo] = useState(false)
+  
   // Lista de clientes para selección
   const clientes = useClientes(getAuthHeaders)
   // Fecha y día por defecto (según PC)
@@ -100,10 +103,27 @@ function FacturaCrear({ onClose, getAuthHeaders }) {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <button className="menu-button" style={{ width: 'auto' }} onClick={() => setShowInfo(true)}>ℹ️</button>
         <h2 style={{ margin: 0 }}>Ingresar facturas pendientes</h2>
         <button className="menu-button" style={{ width: 'auto' }} onClick={onClose}>Volver</button>
       </div>
-
+      {showInfo && (
+            <div className="modal-overlay" role="dialog" aria-modal="true">
+              <div className="modal-card" style={{ maxWidth: 480 }}>
+                <div className="modal-header">
+                  <h3>Instrucciones</h3>
+                  <button className="menu-button" style={{ width: 'auto' }} onClick={() => setShowInfo(false)}>Cerrar</button>
+                </div>
+                <div className="modal-body" style={{ fontSize: 15 }}>
+                  <ul>
+                    <li>Bienvenido al portal para ingresar facturas pendientes</li>
+                    <br />
+                    <li>Ingresa los datos correspondientes (datos como "vueltas" o "cantidad" no son estrictamente necesarios el ingreso!), para luego almacenar y visualizar en la pestaña "Facturas pendientes"</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          )}
       {result && (
         <div style={{
           marginBottom: 12,

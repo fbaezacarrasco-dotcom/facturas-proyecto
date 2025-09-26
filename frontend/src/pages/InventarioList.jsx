@@ -252,33 +252,14 @@ function InventarioList({ getAuthHeaders, canEdit }) {
                 </td>
                 <td>
                   <button
-                    className="menu-button only-sm"
-                    style={{ width: 'auto', marginRight: 6 }}
+                    className="menu-button"
+                    style={{ width: '10xp', height: '10xp', marginRight: 1 }}
                     onClick={() => setDetails({ open: true, item: r })}
                   >
                     Detalles
                   </button>
                   {canEdit && (
                     <>
-                      <button className="menu-button" style={{ width: 'auto', marginRight: 6 }} onClick={() => setEditing(r)}>
-                        Editar
-                      </button>
-                      <button
-                        className="menu-button"
-                        style={{ width: 'auto' }}
-                        onClick={async () => {
-                          if (!confirm('¿Eliminar resguardo?')) return
-                          const res = await fetch(`/api/resguardos/${r.id}`, { method: 'DELETE', headers: { ...(getAuthHeaders?.() || {}) } })
-                          const json = await res.json().catch(() => ({}))
-                          if (!res.ok || json?.ok === false) {
-                            alert(json?.message || 'Error al eliminar')
-                            return
-                          }
-                          load()
-                        }}
-                      >
-                        Eliminar
-                      </button>
                     </>
                   )}
                 </td>
@@ -336,6 +317,36 @@ function InventarioList({ getAuthHeaders, canEdit }) {
                   ))
                 )}
               </div>
+            </div>
+            {/* Botón eliminar */}
+            <div className="full" style={{ gridColumn: '1 / -1', marginTop: 16 }}>
+              <button
+                className="menu-button"
+                style={{ background: '#fee2e2', borderColor: '#fca5a5', color: '#b91c1c', width: 'auto' }}
+                onClick={async () => {
+                  if (!window.confirm('¿Eliminar resguardo?')) return
+                  const res = await fetch(`/api/resguardos/${details.item.id}`, { method: 'DELETE', headers: { ...(getAuthHeaders?.() || {}) } })
+                  const json = await res.json().catch(() => ({}))
+                  if (!res.ok || json?.ok === false) {
+                    alert(json?.message || 'Error al eliminar')
+                    return
+                  }
+                  setDetails({ open: false, item: null })
+                  load()
+                }}
+              >
+                Eliminar resguardo
+              </button>
+              <button
+                className="menu-button"
+                style={{ background: '#e0e7ff', borderColor: '#6366f1', color: '#3730a3', width: 'auto' }}
+                onClick={() => {
+                  setEditing(details.item)
+                  setDetails({ open: false, item: null })
+                }}
+              >
+                Editar resguardo
+              </button>
             </div>
           </div>
         )}
